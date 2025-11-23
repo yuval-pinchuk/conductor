@@ -176,7 +176,7 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
                           <AddIcon />
                         </IconButton>
                         
-                        {/* Button to DELETE Phase (NEW) */}
+                        {/* Button to DELETE Phase (NEW) */} 
                         <IconButton onClick={() => handleRemovePhase(phaseIndex)} size="small" color="secondary" title="Delete Phase">
                           <DeleteIcon />
                         </IconButton>
