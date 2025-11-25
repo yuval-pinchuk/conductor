@@ -23,7 +23,11 @@ const Header = ({
     isRunning,
     isManager,
     handleSetClockTime,
-    handleToggleClock
+    handleToggleClock,
+    handleSetTargetClockTime,
+    handleClearTargetClockTime,
+    targetDateTime,
+    isUsingTargetTime
 }) => {
   const [isEditingClock, setIsEditingClock] = useState(false);
   const [tempClockInput, setTempClockInput] = useState(clockTime);
@@ -116,6 +120,37 @@ const Header = ({
                     {clockTime}
                 </Typography>
             )}
+
+            {isUsingTargetTime && targetDateTime && (
+              <Typography variant="caption" color="inherit">
+                Target: {new Date(targetDateTime).toLocaleString()}
+              </Typography>
+            )}
+
+            {isManager && isEditingClock && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <TextField
+                  type="datetime-local"
+                  size="small"
+                  label="Target Time"
+                  value={targetDateTime || ''}
+                  onChange={(e) => {
+                    handleSetTargetClockTime(e.target.value);
+                    if (e.target.value) {
+                      setIsEditingClock(false);
+                    }
+                  }}
+                  InputLabelProps={{ shrink: true }}
+                  style={{ width: 210, backgroundColor: '#333' }}
+                  inputProps={{ style: { color: 'white' } }}
+                />
+                {isUsingTargetTime && (
+                  <Button size="small" variant="outlined" onClick={handleClearTargetClockTime}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+            )}
             
             {/* Manager-only Clock Controls */}
             {isManager && (
@@ -130,7 +165,7 @@ const Header = ({
                         onClick={handleToggleClock} 
                         size="small"
                         title={isRunning ? "Stop Clock" : "Start Clock"}
-                        disabled={isEditingClock}
+                        disabled={isEditingClock || isUsingTargetTime}
                     >
                         {isRunning ? <StopIcon /> : <PlayArrowIcon />}
                     </IconButton>

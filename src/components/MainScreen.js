@@ -61,6 +61,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [totalSeconds, setTotalSeconds] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [isCountDown, setIsCountDown] = useState(false); // Tracks if initial count was negative
+  const [targetDateTime, setTargetDateTime] = useState('');
+  const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
   
   const handleTogglePhaseActivation = (phaseNumber) => {
     if (!isManager) return;
@@ -71,6 +73,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   };
 
   const handleSetClockTime = (timeString) => {
+    setIsUsingTargetTime(false);
+    setTargetDateTime('');
     // Expects input like "+hh:mm:ss" or "-hh:mm:ss"
     const sign = timeString.startsWith('-') ? -1 : 1;
     const parts = timeString.substring(1).split(':').map(Number);
@@ -80,31 +84,60 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setIsCountDown(sign === -1);
   };
   
+  const handleSetTargetClockTime = (isoString) => {
+    if (!isoString) return;
+    const targetMs = new Date(isoString).getTime();
+    if (Number.isNaN(targetMs)) return;
+    setTargetDateTime(isoString);
+    setIsUsingTargetTime(true);
+    const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
+    setTotalSeconds(diffSeconds);
+    setIsCountDown(diffSeconds < 0);
+    setIsRunning(false);
+  };
+
+  const handleClearTargetClockTime = () => {
+    setTargetDateTime('');
+    setIsUsingTargetTime(false);
+  };
+  
   const handleToggleClock = () => {
-    if (!isManager) return;
+    if (!isManager || isUsingTargetTime) return;
     setIsRunning(prev => !prev);
   };
 
   // Clock Interval Hook
   useInterval(() => {
-    setTotalSeconds(prevSeconds => {
-      let newSeconds = prevSeconds;
-      
-      // If counting down (negative time), decrease until zero, then switch to count-up
-      if (isCountDown && newSeconds < 0) {
-        newSeconds += 1; // Count up towards zero
-      } 
-      // If counting up (positive time or countdown finished)
-      else {
-        if (newSeconds < 0) { // Should only hit this right at the switch point from negative to positive
-          newSeconds = 0;
-        }
-        newSeconds += 1; // Count forward
+    if (isUsingTargetTime && targetDateTime) {
+      const targetMs = new Date(targetDateTime).getTime();
+      if (!Number.isNaN(targetMs)) {
+        const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
+        setTotalSeconds(diffSeconds);
+        setIsCountDown(diffSeconds < 0);
       }
-      
-      return newSeconds;
-    });
-  }, isRunning ? 1000 : null);
+      return;
+    }
+
+    if (!isUsingTargetTime) {
+      setTotalSeconds(prevSeconds => {
+        let newSeconds = prevSeconds;
+        
+        // If counting down (negative time), decrease until zero, then switch to count-up
+        if (isCountDown && newSeconds < 0) {
+          newSeconds += 1; // Count up towards zero
+        } 
+        // If counting up (positive time or countdown finished)
+        else {
+          if (newSeconds < 0) { // Should only hit this right at the switch point from negative to positive
+            newSeconds = 0;
+          }
+          newSeconds += 1; // Count forward
+        }
+        
+        return newSeconds;
+      });
+    }
+  }, (isUsingTargetTime && targetDateTime) || isRunning ? 1000 : null);
 
   // Periodic Script Execution Hook - runs every 5 seconds
   useInterval(async () => {
@@ -175,6 +208,10 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         isManager={isManager}
         handleSetClockTime={handleSetClockTime}
         handleToggleClock={handleToggleClock}
+        handleSetTargetClockTime={handleSetTargetClockTime}
+        handleClearTargetClockTime={handleClearTargetClockTime}
+        targetDateTime={targetDateTime}
+        isUsingTargetTime={isUsingTargetTime}
         
         onToggleEdit={handleToggleEdit}
         onSave={handleSave}
