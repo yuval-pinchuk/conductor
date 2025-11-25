@@ -337,6 +337,7 @@ const EditableTable = ({
       <Table stickyHeader size="small">
         <TableHead>
           <TableRow>
+            <TableCell style={{ width: '5%' }}>#</TableCell>
             <TableCell style={{ width: '10%' }}>Role</TableCell>
             <TableCell style={{ width: '15%' }}>Time (hh:mm:ss)</TableCell>
             <TableCell style={{ width: '10%' }}>Duration (mm:ss)</TableCell>
@@ -355,7 +356,7 @@ const EditableTable = ({
                 <React.Fragment key={phase.phase}>
                 {/* Phase Header Row */}
                 <TableRow style={{ backgroundColor: '#1e1e1e' }}>
-                  <TableCell colSpan={isEditing ? 7 : 6} style={{ 
+                  <TableCell colSpan={isEditing ? 8 : 7} style={{ 
                       fontWeight: 'bold', 
                       backgroundColor: '#1e1e1e' 
                   }}>
@@ -402,9 +403,30 @@ const EditableTable = ({
                   if (row.status === 'Failed') return 'rgba(244, 67, 54, 0.2)'; // Light red
                   return 'transparent'; // Default/N/A
                 };
+
+                const getRowStyles = () => {
+                  const baseColor = getRowBackgroundColor();
+                  if (isUserRoleMatch) {
+                    const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
+                    return {
+                      backgroundColor: baseColor === 'transparent' ? highlightOverlay : baseColor,
+                      boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
+                      borderLeft: '4px solid #2196f3',
+                      transition: 'background-color 0.2s ease',
+                    };
+                  }
+                  return {
+                    backgroundColor: baseColor,
+                    transition: 'background-color 0.2s ease',
+                  };
+                };
                 
                 return ( // <-- Start of the inner return
-                <TableRow key={row.id} style={{ backgroundColor: getRowBackgroundColor() }}>
+                <TableRow key={row.id} style={getRowStyles()}>
+                  {/* Row Number */}
+                  <TableCell align="center" style={{ fontWeight: 'bold' }}>
+                    {rowIndex + 1}
+                  </TableCell>
                   {/* Role */}
                   <TableCell>
                     {isEditing ? (
