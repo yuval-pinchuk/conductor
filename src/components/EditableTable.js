@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { ALL_AVAILABLE_ROLES } from '../data';
 
 // Helper for time input with +/-
@@ -81,10 +82,17 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
   };
 
   const handleAddRow = (phaseIndex) => {
-    const newRow = { id: Date.now(), role: allRoles[0] || 'Role', time: '00:00:00', duration: '00:00', description: '', worked: true };
+    const newRow = { id: Date.now(), role: allRoles[0] || 'Role', time: '00:00:00', duration: '00:00', description: '', status: 'N/A', script: '' };
     const newPhases = [...tableData];
     newPhases[phaseIndex].rows.push(newRow);
     setTableData(newPhases);
+  };
+
+  const handleRunScript = (scriptPath) => {
+    if (scriptPath) {
+      alert(`Simulating script execution:\nPath: ${scriptPath}\n\nCheck console for details.`);
+      console.log(`[SCRIPT RUNNER] Attempting to execute script at: ${scriptPath}`);
+    }
   };
 
   const handleRemoveRow = (phaseIndex, rowIndex) => {
@@ -152,7 +160,8 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
             <TableCell style={{ width: '10%' }}>Role</TableCell>
             <TableCell style={{ width: '15%' }}>Time (hh:mm:ss)</TableCell>
             <TableCell style={{ width: '10%' }}>Duration (mm:ss)</TableCell>
-            <TableCell style={{ width: '50%' }}>Description</TableCell>
+            <TableCell style={{ width: '35%' }}>Description</TableCell>
+            <TableCell style={{ width: '15%' }}>Script</TableCell>
             <TableCell style={{ width: '10%' }}>Status</TableCell>
             {isEditing && <TableCell style={{ width: '5%' }}>Actions</TableCell>}
           </TableRow>
@@ -163,7 +172,7 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
             <React.Fragment key={phase.phase}>
               {/* Phase Header Row */}
                 <TableRow style={{ backgroundColor: '#1e1e1e' }}>
-                  <TableCell colSpan={isEditing ? 6 : 5} style={{ 
+                  <TableCell colSpan={isEditing ? 7 : 6} style={{ 
                       fontWeight: 'bold', 
                       backgroundColor: '#1e1e1e' 
                   }}>
@@ -242,6 +251,33 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
                       <Typography style={{ whiteSpace: 'pre-wrap' }}>
                         {row.description}
                       </Typography>
+                    )}
+                  </TableCell>
+                  
+                  {/* Script Column */}
+                  <TableCell>
+                    {isEditing ? (
+                      <TextField
+                        value={row.script || ''}
+                        onChange={(e) => handleChange(phaseIndex, rowIndex, 'script', e.target.value)}
+                        size="small"
+                        placeholder="Path/API Endpoint"
+                        fullWidth
+                      />
+                    ) : (
+                      row.script ? (
+                        <Button 
+                          variant="contained" 
+                          size="small"
+                          color="primary"
+                          startIcon={<PlayArrowIcon />}
+                          onClick={() => handleRunScript(row.script)}
+                        >
+                          Run Script
+                        </Button>
+                      ) : (
+                        <span style={{ color: '#666' }}>—</span>
+                      )
                     )}
                   </TableCell>
                   

@@ -10,15 +10,15 @@ export const INITIAL_TABLE_DATA = [
   {
     phase: 1,
     rows: [
-      { id: 101, role: 'Developer', time: '01:00:00', duration: '05:30', description: 'Setup environment and compile core modules.', status: 'N/A' },
-      { id: 102, role: 'Tester', time: '01:05:00', duration: '02:00', description: 'Ran initial smoke tests.', status: 'N/A' },
+      { id: 101, role: 'Developer', time: '01:00:00', duration: '05:30', description: 'Setup environment and compile core modules.', script: '', status: 'N/A' },
+      { id: 102, role: 'Tester', time: '01:05:00', duration: '02:00', description: 'Ran initial smoke tests.', script: '', status: 'N/A' },
     ]
   },
   {
     phase: 2,
     rows: [
-      { id: 201, role: 'Manager', time: '01:30:00', duration: '01:00', description: 'Reviewed test plan for phase 2.', status: 'N/A' },
-      { id: 202, role: 'Developer', time: '01:45:00', duration: '15:10', description: 'Executed feature X integration test. This description is very long and should cause the row to expand.', status: 'N/A' },
+      { id: 201, role: 'Manager', time: '01:30:00', duration: '01:00', description: 'Reviewed test plan for phase 2.', script: '', status: 'N/A' },
+      { id: 202, role: 'Developer', time: '01:45:00', duration: '15:10', description: 'Executed feature X integration test. This description is very long and should cause the row to expand.', script: '', status: 'N/A' },
     ]
   }
 ];
