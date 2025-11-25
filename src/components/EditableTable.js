@@ -95,16 +95,27 @@ const EditableTable = ({
   };
 
   const handleAddRow = (phaseIndex) => {
-    const newRow = { id: Date.now(), role: allRoles[0] || 'Role', time: '00:00:00', duration: '00:00', description: '', status: 'N/A', script: '' };
+    const newRow = { id: Date.now(), role: allRoles[0] || 'Role', time: '00:00:00', duration: '00:00', description: '', status: 'N/A', script: '', scriptResult: undefined };
     const newPhases = [...tableData];
     newPhases[phaseIndex].rows.push(newRow);
     setTableData(newPhases);
   };
 
-  const handleRunScript = (scriptPath) => {
+  const handleRunScript = async (phaseIndex, rowIndex, scriptPath) => {
     if (scriptPath) {
-      alert(`Simulating script execution:\nPath: ${scriptPath}\n\nCheck console for details.`);
       console.log(`[SCRIPT RUNNER] Attempting to execute script at: ${scriptPath}`);
+      
+      // Simulate script execution - in real implementation, this would call an API
+      // For now, randomly return true/false to demonstrate the feature
+      // Replace this with actual API call that returns boolean
+      const scriptResult = Math.random() > 0.5; // Simulated result
+      
+      // Update the row with the script result
+      const newPhases = [...tableData];
+      newPhases[phaseIndex].rows[rowIndex].scriptResult = scriptResult;
+      setTableData(newPhases);
+      
+      console.log(`[SCRIPT RUNNER] Script result: ${scriptResult}`);
     }
   };
 
@@ -307,15 +318,24 @@ const EditableTable = ({
                       />
                     ) : (
                       row.script ? (
-                        <Button 
-                          variant="contained" 
-                          size="small"
-                          color="primary"
-                          startIcon={<PlayArrowIcon />}
-                          onClick={() => handleRunScript(row.script)}
-                        >
-                          Run Script
-                        </Button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Button 
+                            variant="contained" 
+                            size="small"
+                            color="primary"
+                            startIcon={<PlayArrowIcon />}
+                            onClick={() => handleRunScript(phaseIndex, rowIndex, row.script)}
+                          >
+                            Run Script
+                          </Button>
+                          {row.scriptResult !== undefined && (
+                            row.scriptResult ? (
+                              <CheckIcon color="success" style={{ fontSize: 24 }} />
+                            ) : (
+                              <CloseIcon color="error" style={{ fontSize: 24 }} />
+                            )
+                          )}
+                        </div>
                       ) : (
                         <span style={{ color: '#666' }}>—</span>
                       )
