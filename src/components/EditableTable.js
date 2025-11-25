@@ -11,6 +11,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ToggleOnIcon from '@mui/icons-material/ToggleOn';
 import ToggleOffIcon from '@mui/icons-material/ToggleOff';
+import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
 import { ALL_AVAILABLE_ROLES } from '../data';
 
 // Helper for time input with +/-
@@ -227,8 +229,15 @@ const EditableTable = ({
                 const isUserRoleMatch = row.role === userRole;
                 const canChangeStatus = isPhaseActive && (isUserRoleMatch || isManager);
                 
+                // Determine row background color based on status
+                const getRowBackgroundColor = () => {
+                  if (row.status === 'Passed') return 'rgba(76, 175, 80, 0.2)'; // Light green
+                  if (row.status === 'Failed') return 'rgba(244, 67, 54, 0.2)'; // Light red
+                  return 'transparent'; // Default/N/A
+                };
+                
                 return ( // <-- Start of the inner return
-                <TableRow key={row.id}>
+                <TableRow key={row.id} style={{ backgroundColor: getRowBackgroundColor() }}>
                   {/* Role */}
                   <TableCell>
                     {isEditing ? (
@@ -313,20 +322,29 @@ const EditableTable = ({
                     )}
                   </TableCell>
                   
-                  {/* Status (Pass/Fail/N/A) Column - The original code had a duplicate status column here. Removed the first, kept the second one. */}
-                        <TableCell>
-                            <Select
-                              value={row.status || 'N/A'}
-                              onChange={(e) => handleChange(phaseIndex, rowIndex, 'status', e.target.value)}
-                              size="small"
-                              style={{ width: '100%' }}
-                              disabled={!canChangeStatus} 
-                            >
-                              <MenuItem value="Passed">Passed</MenuItem>
-                              <MenuItem value="Failed">Failed</MenuItem>
-                              <MenuItem value="N/A">N/A</MenuItem>
-                            </Select>
-                        </TableCell>
+                  {/* Status (Pass/Fail) Column - V and X buttons */}
+                  <TableCell>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <IconButton
+                        onClick={() => handleChange(phaseIndex, rowIndex, 'status', 'Passed')}
+                        size="small"
+                        disabled={!canChangeStatus}
+                        color={row.status === 'Passed' ? 'success' : 'default'}
+                        title="Passed"
+                      >
+                        <CheckIcon />
+                      </IconButton>
+                      <IconButton
+                        onClick={() => handleChange(phaseIndex, rowIndex, 'status', 'Failed')}
+                        size="small"
+                        disabled={!canChangeStatus}
+                        color={row.status === 'Failed' ? 'error' : 'default'}
+                        title="Failed"
+                      >
+                        <CloseIcon />
+                      </IconButton>
+                    </div>
+                  </TableCell>
                   
                   {/* Actions (Remove) */}
                   {isEditing && (
