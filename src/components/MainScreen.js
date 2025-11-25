@@ -31,7 +31,7 @@ const formatTime = (totalSeconds) => {
   return (isNegative ? '-' : '+') + hours + ':' + minutes + ':' + seconds;
 };
 
-const MainScreen = ({ project, role, onLogout }) => {
+const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === 'Manager';
   
   // State for the project version
@@ -164,6 +164,7 @@ const MainScreen = ({ project, role, onLogout }) => {
       <Header
         project={project}
         role={role}
+        name={name}
         isEditing={isEditing}
         currentVersion={currentVersion}
         setCurrentVersion={setCurrentVersion}
