@@ -9,6 +9,8 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import ToggleOnIcon from '@mui/icons-material/ToggleOn';
+import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 import { ALL_AVAILABLE_ROLES } from '../data';
 
 // Helper for time input with +/-
@@ -71,7 +73,16 @@ return (
 };
 
 
-const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRoles }) => {
+const EditableTable = ({
+    tableData,
+    setTableData,
+    isEditing,
+    allRoles,
+    setAllRoles,
+    userRole,
+    isManager,
+    activePhases,
+    handleTogglePhaseActivation }) => {
   
   const [newRole, setNewRole] = useState('');
   
@@ -168,16 +179,31 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
         </TableHead>
         <TableBody>
           {/* Data Rows */}
-          {tableData.map((phase, phaseIndex) => (
-            <React.Fragment key={phase.phase}>
-              {/* Phase Header Row */}
+          {tableData.map((phase, phaseIndex) => {
+            const isPhaseActive = !!activePhases[phase.phase];  
+            
+            return (
+                <React.Fragment key={phase.phase}>
+                {/* Phase Header Row */}
                 <TableRow style={{ backgroundColor: '#1e1e1e' }}>
                   <TableCell colSpan={isEditing ? 7 : 6} style={{ 
                       fontWeight: 'bold', 
                       backgroundColor: '#1e1e1e' 
                   }}>
                     Phase {phase.phase}
-                  
+                    {/* Phase Activation Toggle */}
+                    {isManager && (
+                        <IconButton 
+                            onClick={() => handleTogglePhaseActivation(phase.phase)} 
+                            size="small" 
+                            color={isPhaseActive ? 'success' : 'secondary'}
+                            title={isPhaseActive ? "Deactivate Phase" : "Activate Phase"}
+                        >
+                            {isPhaseActive ? <ToggleOnIcon /> : <ToggleOffIcon />}
+                        </IconButton>
+                    )}
+                    {isPhaseActive && <span style={{ marginLeft: 8, color: 'lightgreen' }}>(ACTIVE)</span>}
+
                     {isEditing && (
                       <>
                         {/* Button to ADD Row */}
@@ -185,7 +211,7 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
                           <AddIcon />
                         </IconButton>
                         
-                        {/* Button to DELETE Phase (NEW) */} 
+                        {/* Button to DELETE Phase */} 
                         <IconButton onClick={() => handleRemovePhase(phaseIndex)} size="small" color="secondary" title="Delete Phase">
                           <DeleteIcon />
                         </IconButton>
@@ -195,7 +221,13 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
                 </TableRow>
 
               {/* Data Rows */}
-              {phase.rows.map((row, rowIndex) => (
+              {phase.rows.map((row, rowIndex) => {
+
+                // --- ACCESS CONTROL LOGIC---
+                const isUserRoleMatch = row.role === userRole;
+                const canChangeStatus = isPhaseActive && (isUserRoleMatch || isManager);
+                
+                return ( // <-- Start of the inner return
                 <TableRow key={row.id}>
                   {/* Role */}
                   <TableCell>
@@ -281,21 +313,20 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
                     )}
                   </TableCell>
                   
-                  {/* Status (Pass/Fail/N/A) Column */}
-                  <TableCell>
-                    <Select
-                      value={row.status || 'N/A'} // Assuming data uses 'status' now
-                      onChange={(e) => handleChange(phaseIndex, rowIndex, 'status', e.target.value)}
-                      size="small"
-                      style={{ width: '100%' }}
-              // This column is always editable per your request
-              // You can use the theme status colors for visual cues if desired
-                    >
-                      <MenuItem value="Passed">Passed</MenuItem>
-                      <MenuItem value="Failed">Failed</MenuItem>
-                      <MenuItem value="N/A">N/A</MenuItem>
-                    </Select>
-                  </TableCell>
+                  {/* Status (Pass/Fail/N/A) Column - The original code had a duplicate status column here. Removed the first, kept the second one. */}
+                        <TableCell>
+                            <Select
+                              value={row.status || 'N/A'}
+                              onChange={(e) => handleChange(phaseIndex, rowIndex, 'status', e.target.value)}
+                              size="small"
+                              style={{ width: '100%' }}
+                              disabled={!canChangeStatus} 
+                            >
+                              <MenuItem value="Passed">Passed</MenuItem>
+                              <MenuItem value="Failed">Failed</MenuItem>
+                              <MenuItem value="N/A">N/A</MenuItem>
+                            </Select>
+                        </TableCell>
                   
                   {/* Actions (Remove) */}
                   {isEditing && (
@@ -306,9 +337,10 @@ const EditableTable = ({ tableData, setTableData, isEditing, allRoles, setAllRol
                     </TableCell>
                   )}
                 </TableRow>
-              ))}
+                );
+              })}
             </React.Fragment>
-          ))}
+          )})}
         </TableBody>
       </Table>
     </TableContainer>

@@ -1,10 +1,13 @@
 // src/components/Header.js
 
-import React from 'react';
-import { AppBar, Toolbar, Typography, IconButton, TextField, InputAdornment} from '@mui/material';
+import React, {useState} from 'react';
+import { AppBar, Toolbar, Typography, IconButton, TextField, InputAdornment, Button} from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow'; // Play icon
+import StopIcon from '@mui/icons-material/Stop';       // Stop icon
+import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Clock icon
 
 const Header = ({ 
     project, 
@@ -14,8 +17,31 @@ const Header = ({
     setCurrentVersion, 
     onToggleEdit, 
     onSave, 
-    onCancel 
+    onCancel,
+    clockTime,
+    isRunning,
+    isManager,
+    handleSetClockTime,
+    handleToggleClock
 }) => {
+  const [isEditingClock, setIsEditingClock] = useState(false);
+  const [tempClockInput, setTempClockInput] = useState(clockTime);
+    
+  const handleClockEditStart = () => {
+      setTempClockInput(clockTime);
+      setIsEditingClock(true);
+  };
+
+  const handleClockEditSave = () => {
+      // Simple regex check for format (+/-hh:mm:ss)
+      const timeRegex = /^[+-]\d{2}:\d{2}:\d{2}$/;
+      if (timeRegex.test(tempClockInput)) {
+          handleSetClockTime(tempClockInput);
+          setIsEditingClock(false);
+      } else {
+          alert("Invalid time format. Use +/-hh:mm:ss.");
+      }
+  };
     
   // Handler to restrict input to numbers and dots (and enforce v prefix)
   const handleVersionChange = (e) => {
@@ -64,7 +90,49 @@ const Header = ({
             Role: {role}
           </Typography>
         </div>
-
+        {/* Clock Display */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <AccessTimeIcon color="primary" />
+            
+            {isEditingClock ? (
+                <>
+                    <TextField
+                        value={tempClockInput}
+                        onChange={(e) => setTempClockInput(e.target.value)}
+                        size="small"
+                        placeholder="+hh:mm:ss"
+                        style={{ width: 120, backgroundColor: '#333' }}
+                        inputProps={{ style: { padding: 4, color: 'white' } }}
+                    />
+                    <Button size="small" variant="contained" onClick={handleClockEditSave}>Save</Button>
+                    <Button size="small" variant="outlined" onClick={() => setIsEditingClock(false)}>Cancel</Button>
+                </>
+            ) : (
+                <Typography variant="h5" style={{ color: isRunning ? 'red' : 'inherit' }}>
+                    {clockTime}
+                </Typography>
+            )}
+            
+            {/* Manager-only Clock Controls */}
+            {isManager && (
+                <>
+                    {!isEditingClock && (
+                        <IconButton color="primary" onClick={handleClockEditStart} size="small" title="Edit Time">
+                            <EditIcon style={{ fontSize: 16 }} />
+                        </IconButton>
+                    )}
+                    <IconButton 
+                        color={isRunning ? 'secondary' : 'primary'} 
+                        onClick={handleToggleClock} 
+                        size="small"
+                        title={isRunning ? "Stop Clock" : "Start Clock"}
+                        disabled={isEditingClock}
+                    >
+                        {isRunning ? <StopIcon /> : <PlayArrowIcon />}
+                    </IconButton>
+                </>
+            )}
+        </div>
         {/* Right Corner: Edit/Save/Cancel */}
         <div>
           {isEditing ? (
