@@ -11,7 +11,8 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Clock icon
 
 const Header = ({ 
     project, 
-    role, 
+    role,
+    name,
     isEditing, 
     currentVersion, 
     setCurrentVersion, 
@@ -81,13 +82,16 @@ const Header = ({
             </Typography>
           )}
 
-        {/* Center: Project Name and Role */}
-        <div style={{ textAlign: 'center' }}>
-          <Typography variant="h5" color="inherit">
+        {/* Center: Project, Role, and Name - side by side, same size */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <Typography variant="h6" color="inherit" style={{ minWidth: 150, textAlign: 'center' }}>
             {project.name}
           </Typography>
-          <Typography variant="subtitle2" color="inherit">
-            Role: {role}
+          <Typography variant="h6" color="inherit" style={{ minWidth: 150, textAlign: 'center' }}>
+            {role}
+          </Typography>
+          <Typography variant="h6" color="inherit" style={{ minWidth: 150, textAlign: 'center' }}>
+            {name}
           </Typography>
         </div>
         {/* Clock Display */}

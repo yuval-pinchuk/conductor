@@ -47,6 +47,16 @@ const MainScreen = ({ project, role, onLogout }) => {
   // Phase Activation State
   const [activePhases, setActivePhases] = useState({}); // Example: { 1: true, 2: false }
   
+  // Periodic Scripts State
+  const [periodicScripts, setPeriodicScripts] = useState([
+    { id: 1, name: 'Health Check', path: '/scripts/health.js', status: true },
+    { id: 2, name: 'Backup', path: '/scripts/backup.js', status: false }
+  ]);
+  const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([
+    { id: 1, name: 'Health Check', path: '/scripts/health.js', status: true },
+    { id: 2, name: 'Backup', path: '/scripts/backup.js', status: false }
+  ]);
+  
   // Clock State Management
   const [totalSeconds, setTotalSeconds] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
@@ -96,12 +106,34 @@ const MainScreen = ({ project, role, onLogout }) => {
     });
   }, isRunning ? 1000 : null);
 
+  // Periodic Script Execution Hook - runs every 5 seconds
+  useInterval(async () => {
+    if (periodicScripts.length > 0) {
+      const updatedScripts = await Promise.all(
+        periodicScripts.map(async (script) => {
+          if (script.path) {
+            // Simulate script execution - in real implementation, this would call an API
+            // Replace this with actual API call that returns boolean
+            const result = Math.random() > 0.5; // Simulated result
+            
+            console.log(`[PERIODIC SCRIPT] ${script.name} (${script.path}): ${result}`);
+            return { ...script, status: result };
+          }
+          return script;
+        })
+      );
+      setPeriodicScripts(updatedScripts);
+    }
+  }, 5000); // Run every 5 seconds
+
   const handleToggleEdit = () => {
     if (!isEditing && role === 'Manager') {
       // Create a DEEP CLONE of the table data to prevent mutation
       const clonedData = JSON.parse(JSON.stringify(currentTableData)); 
+      const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
       
       setOriginalTableData(clonedData);      // <-- Save the deep clone
+      setOriginalPeriodicScripts(clonedScripts);
       setOriginalVersion(currentVersion); 
       setIsEditing(true);
     } else if (isEditing) {
@@ -112,6 +144,7 @@ const MainScreen = ({ project, role, onLogout }) => {
   const handleSave = () => {
     // 1. Update the official original state with the current state (still using a deep copy)
     setOriginalTableData(JSON.parse(JSON.stringify(currentTableData))); 
+    setOriginalPeriodicScripts(JSON.parse(JSON.stringify(periodicScripts)));
     setOriginalVersion(currentVersion); 
     setIsEditing(false);
     console.log("Changes Saved. New Version:", currentVersion);
@@ -120,6 +153,7 @@ const MainScreen = ({ project, role, onLogout }) => {
   const handleCancel = () => {
     // 2. Revert to the deep clone saved at the start of the session
     setCurrentTableData(originalTableData); 
+    setPeriodicScripts(originalPeriodicScripts);
     setCurrentVersion(originalVersion); 
     setIsEditing(false);
     console.log("Changes Canceled. Reverted to original data and version.");
@@ -161,6 +195,8 @@ const MainScreen = ({ project, role, onLogout }) => {
           isManager={isManager}
           activePhases={activePhases}
           handleTogglePhaseActivation={handleTogglePhaseActivation}
+          periodicScripts={periodicScripts}
+          setPeriodicScripts={setPeriodicScripts}
         />
         
         <Button onClick={onLogout} variant="outlined" style={{ marginTop: 20 }}>

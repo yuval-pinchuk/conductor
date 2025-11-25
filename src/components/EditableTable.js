@@ -84,7 +84,9 @@ const EditableTable = ({
     userRole,
     isManager,
     activePhases,
-    handleTogglePhaseActivation }) => {
+    handleTogglePhaseActivation,
+    periodicScripts,
+    setPeriodicScripts }) => {
   
   const [newRole, setNewRole] = useState('');
   
@@ -157,8 +159,162 @@ const EditableTable = ({
     setTableData(newPhases);
   };
 
+  const handleAddPeriodicScript = () => {
+    const newScript = { id: Date.now(), name: 'New Script', path: '', status: false };
+    setPeriodicScripts([...periodicScripts, newScript]);
+  };
+
+  const handleUpdatePeriodicScript = (scriptId, field, value) => {
+    const updatedScripts = periodicScripts.map(script =>
+      script.id === scriptId ? { ...script, [field]: value } : script
+    );
+    setPeriodicScripts(updatedScripts);
+  };
+
+  const handleRemovePeriodicScript = (scriptId) => {
+    setPeriodicScripts(periodicScripts.filter(script => script.id !== scriptId));
+  };
+
   return (
       <TableContainer component={Paper} style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0' }}>
+      
+        {/* Periodic Scripts Row */}
+        <div style={{ padding: '15px', borderBottom: '2px solid #444', backgroundColor: '#1e1e1e' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 15, flexWrap: 'wrap' }}>
+            {periodicScripts.map((script) => (
+              <div
+                key={script.id}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 5,
+                  minWidth: 100
+                }}
+              >
+                {isEditing && isManager ? (
+                  <>
+                    <TextField
+                      value={script.name}
+                      onChange={(e) => handleUpdatePeriodicScript(script.id, 'name', e.target.value)}
+                      size="small"
+                      placeholder="Script Name"
+                      style={{ width: 120 }}
+                      sx={{
+                        '& .MuiOutlinedInput-root': {
+                          backgroundColor: '#2d2d2d',
+                          color: 'white',
+                          '& fieldset': {
+                            borderColor: '#555',
+                          },
+                          '&:hover fieldset': {
+                            borderColor: '#777',
+                          },
+                          '&.Mui-focused fieldset': {
+                            borderColor: '#999',
+                          },
+                        },
+                        '& .MuiInputBase-input::placeholder': {
+                          color: '#aaa',
+                          opacity: 1,
+                        },
+                      }}
+                    />
+                    <TextField
+                      value={script.path}
+                      onChange={(e) => handleUpdatePeriodicScript(script.id, 'path', e.target.value)}
+                      size="small"
+                      placeholder="Script Path"
+                      style={{ width: 200 }}
+                      sx={{
+                        '& .MuiOutlinedInput-root': {
+                          backgroundColor: '#2d2d2d',
+                          color: 'white',
+                          '& fieldset': {
+                            borderColor: '#555',
+                          },
+                          '&:hover fieldset': {
+                            borderColor: '#777',
+                          },
+                          '&.Mui-focused fieldset': {
+                            borderColor: '#999',
+                          },
+                        },
+                        '& .MuiInputBase-input::placeholder': {
+                          color: '#aaa',
+                          opacity: 1,
+                        },
+                      }}
+                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <div
+                        style={{
+                          width: 60,
+                          height: 60,
+                          borderRadius: '50%',
+                          backgroundColor: script.status ? '#4caf50' : '#f44336',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          fontSize: 12,
+                          textAlign: 'center',
+                          padding: 5,
+                          boxSizing: 'border-box'
+                        }}
+                        title={script.path || 'No path set'}
+                      >
+                        {script.name || 'Unnamed'}
+                      </div>
+                      <IconButton
+                        onClick={() => handleRemovePeriodicScript(script.id)}
+                        size="small"
+                        color="error"
+                        title="Remove Script"
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </div>
+                  </>
+                ) : (
+                  <div
+                    style={{
+                      width: 60,
+                      height: 60,
+                      borderRadius: '50%',
+                      backgroundColor: script.status ? '#4caf50' : '#f44336',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      fontWeight: 'bold',
+                      fontSize: 12,
+                      textAlign: 'center',
+                      padding: 5,
+                      boxSizing: 'border-box',
+                      cursor: 'pointer'
+                    }}
+                    title={`${script.name}${script.path ? `\nPath: ${script.path}` : '\nNo path set'}\nStatus: ${script.status ? 'True' : 'False'}`}
+                  >
+                    {script.name || 'Unnamed'}
+                  </div>
+                )}
+              </div>
+            ))}
+            {isEditing && isManager && (
+              <IconButton
+                onClick={handleAddPeriodicScript}
+                size="small"
+                color="primary"
+                title="Add Periodic Script"
+                style={{ marginLeft: 10 }}
+              >
+                <AddIcon />
+              </IconButton>
+            )}
+          </div>
+        </div>
       
         {/* Manager Controls Area */}
         {isEditing && (

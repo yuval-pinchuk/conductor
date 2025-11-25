@@ -27,7 +27,8 @@ const App = () => {
         {loginState ? (
           <MainScreen 
             project={loginState.project} 
-            role={loginState.role} 
+            role={loginState.role}
+            name={loginState.name}
             onLogout={handleLogout} 
           />
         ) : (

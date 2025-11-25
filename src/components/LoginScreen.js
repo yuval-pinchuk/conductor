@@ -2,15 +2,16 @@
 
 import React, { useState, useEffect } from 'react';
 import { PROJECTS } from '../data';
-import { Select, MenuItem, Button, FormControl, InputLabel } from '@mui/material';
+import { Select, MenuItem, Button, FormControl, InputLabel, TextField } from '@mui/material';
 
 const LoginScreen = ({ onLogin }) => {
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedRole, setSelectedRole] = useState('');
+  const [userName, setUserName] = useState('');
   const [availableRoles, setAvailableRoles] = useState([]);
   
   const selectedProject = PROJECTS.find(p => p.id === selectedProjectId);
-  const isLoginEnabled = selectedProjectId && selectedRole;
+  const isLoginEnabled = selectedProjectId && selectedRole && userName.trim() !== '';
 
   // Effect to update roles when project changes
   useEffect(() => {
@@ -26,7 +27,8 @@ const LoginScreen = ({ onLogin }) => {
     if (isLoginEnabled) {
       onLogin({
         project: selectedProject,
-        role: selectedRole
+        role: selectedRole,
+        name: userName.trim()
       });
     }
   };
@@ -35,6 +37,14 @@ const LoginScreen = ({ onLogin }) => {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 50 }}>
       <h2>Experiment Manager Login</h2>
       
+      <TextField
+        value={userName}
+        onChange={(e) => setUserName(e.target.value)}
+        label="Name"
+        required
+        sx={{ m: 1, minWidth: 300 }}
+      />
+
       <FormControl sx={{ m: 1, minWidth: 300 }}>
         <InputLabel id="project-label">Project</InputLabel>
         <Select
