@@ -23,7 +23,7 @@ const Header = ({
     isRunning,
     isManager,
     handleSetClockTime,
-l    handleToggleClock,
+    handleToggleClock,
     handleSetTargetClockTime,
     handleClearTargetClockTime,
     targetDateTime,

@@ -235,6 +235,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           handleTogglePhaseActivation={handleTogglePhaseActivation}
           periodicScripts={periodicScripts}
           setPeriodicScripts={setPeriodicScripts}
+          currentClockSeconds={totalSeconds}
+          isClockRunning={isRunning || (isUsingTargetTime && !!targetDateTime)}
         />
         
         <Button onClick={onLogout} variant="outlined" style={{ marginTop: 20 }}>

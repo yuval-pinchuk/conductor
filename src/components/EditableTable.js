@@ -86,7 +86,9 @@ const EditableTable = ({
     activePhases,
     handleTogglePhaseActivation,
     periodicScripts,
-    setPeriodicScripts }) => {
+    setPeriodicScripts,
+    currentClockSeconds,
+    isClockRunning }) => {
   
   const [newRole, setNewRole] = useState('');
   
@@ -173,6 +175,13 @@ const EditableTable = ({
 
   const handleRemovePeriodicScript = (scriptId) => {
     setPeriodicScripts(periodicScripts.filter(script => script.id !== scriptId));
+  };
+
+  const parseTimeToSeconds = (timeStr) => {
+    if (!timeStr || typeof timeStr !== 'string') return null;
+    const parts = timeStr.split(':').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return null;
+    return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
   };
 
   return (
@@ -397,6 +406,16 @@ const EditableTable = ({
                 const isUserRoleMatch = row.role === userRole;
                 const canChangeStatus = isPhaseActive && (isUserRoleMatch || isManager);
                 
+                const rowTimeSeconds = parseTimeToSeconds(row.time);
+                const isStatusUnset = !row.status || row.status === 'N/A';
+                const hasClockPassedRowTime = Boolean(
+                  isClockRunning &&
+                  currentClockSeconds >= 0 &&
+                  rowTimeSeconds !== null &&
+                  currentClockSeconds >= rowTimeSeconds
+                );
+                const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
+                
                 // Determine row background color based on status
                 const getRowBackgroundColor = () => {
                   if (row.status === 'Passed') return 'rgba(76, 175, 80, 0.2)'; // Light green
@@ -406,19 +425,32 @@ const EditableTable = ({
 
                 const getRowStyles = () => {
                   const baseColor = getRowBackgroundColor();
-                  if (isUserRoleMatch) {
-                    const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
-                    return {
-                      backgroundColor: baseColor === 'transparent' ? highlightOverlay : baseColor,
-                      boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
-                      borderLeft: '4px solid #2196f3',
-                      transition: 'background-color 0.2s ease',
-                    };
-                  }
-                  return {
+                  let styles = {
                     backgroundColor: baseColor,
                     transition: 'background-color 0.2s ease',
                   };
+
+                  if (isUserRoleMatch) {
+                    const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
+                    styles = {
+                      ...styles,
+                      backgroundColor: baseColor === 'transparent' ? highlightOverlay : baseColor,
+                      boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
+                      borderLeft: '4px solid #2196f3',
+                    };
+                  }
+
+                  if (shouldHighlightOverdue) {
+                    const overdueOverlay = 'rgba(255, 193, 7, 0.18)';
+                    styles = {
+                      ...styles,
+                      backgroundColor: styles.backgroundColor === 'transparent' ? overdueOverlay : styles.backgroundColor,
+                      boxShadow: `${styles.boxShadow ? `${styles.boxShadow}, ` : ''}0 0 10px rgba(255, 193, 7, 0.4)`,
+                      border: styles.border || '1px solid rgba(255, 193, 7, 0.7)',
+                    };
+                  }
+
+                  return styles;
                 };
                 
                 return ( // <-- Start of the inner return
