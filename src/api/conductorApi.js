@@ -73,6 +73,17 @@ export const api = {
       body: payload,
     }),
 
+  deleteProject: (projectId) =>
+    request(`/api/projects/${projectId}`, {
+      method: 'DELETE',
+    }),
+
+  verifyManagerPassword: (projectId, password) =>
+    request(`/api/projects/${projectId}/verify-manager`, {
+      method: 'POST',
+      body: { password },
+    }),
+
   // Bulk updates
   updateTableData: (projectId, phasesPayload) =>
     request(`/api/projects/${projectId}/table-data`, {

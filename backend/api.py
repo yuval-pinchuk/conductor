@@ -41,6 +41,7 @@ def import_project():
     data = request.get_json()
     name = (data.get('name') or '').strip()
     rows_data = data.get('rows') or []
+    manager_password = (data.get('managerPassword') or '').strip()
 
     if not name:
         return jsonify({'error': 'Project name is required'}), 400
@@ -53,6 +54,8 @@ def import_project():
 
     try:
         project = Project(name=name)
+        if manager_password:
+            project.set_manager_password(manager_password)
         db.session.add(project)
         db.session.flush()
 
@@ -105,6 +108,31 @@ def import_project():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'error': str(exc)}), 500
+
+
+@api.route('/api/projects/<int:project_id>/verify-manager', methods=['POST'])
+def verify_manager_password(project_id):
+    """Verify manager password for locked projects"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json() or {}
+    password = data.get('password', '')
+
+    if not project.manager_password_hash:
+        return jsonify({'success': True, 'locked': False}), 200
+
+    if project.check_manager_password(password):
+        return jsonify({'success': True, 'locked': True}), 200
+
+    return jsonify({'success': False, 'locked': True}), 401
+
+
+@api.route('/api/projects/<int:project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    """Delete an entire project"""
+    project = Project.query.get_or_404(project_id)
+    db.session.delete(project)
+    db.session.commit()
+    return jsonify({'message': 'Project deleted'}), 200
 
 
 # ==================== PHASE ENDPOINTS ====================

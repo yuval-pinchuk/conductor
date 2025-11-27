@@ -17,7 +17,11 @@ import {
   Stack,
   Alert,
   Box,
+  IconButton,
+  InputAdornment,
 } from '@mui/material';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import * as XLSX from 'xlsx';
 import { api } from '../api/conductorApi';
 
@@ -28,6 +32,8 @@ const LoginScreen = ({ onLogin }) => {
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedRole, setSelectedRole] = useState('');
   const [userName, setUserName] = useState('');
+  const [managerPassword, setManagerPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [availableRoles, setAvailableRoles] = useState([]);
   const [projects, setProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
@@ -36,6 +42,9 @@ const LoginScreen = ({ onLogin }) => {
   // New project modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectPassword, setNewProjectPassword] = useState('');
+  const [showManagerPassword, setShowManagerPassword] = useState(false);
+  const [showNewProjectPassword, setShowNewProjectPassword] = useState(false);
   const [importRows, setImportRows] = useState([]);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [importError, setImportError] = useState('');
@@ -43,6 +52,7 @@ const LoginScreen = ({ onLogin }) => {
 
   const resetCreateProjectState = () => {
     setNewProjectName('');
+    setNewProjectPassword('');
     setImportRows([]);
     setSelectedFileName('');
     setImportError('');
@@ -69,7 +79,14 @@ const LoginScreen = ({ onLogin }) => {
   }, [fetchProjects]);
 
   const selectedProject = projects.find(p => p.id === selectedProjectId);
-  const isLoginEnabled = Boolean(selectedProjectId && selectedRole && userName.trim() !== '' && !isLoadingProjects);
+  const requiresManagerPassword = selectedRole === 'Manager' && selectedProject?.is_locked;
+  const isLoginEnabled = Boolean(
+    selectedProjectId &&
+    selectedRole &&
+    userName.trim() !== '' &&
+    !isLoadingProjects &&
+    (!requiresManagerPassword || managerPassword.trim() !== '')
+  );
 
   // Effect to update roles when project changes
   useEffect(() => {
@@ -81,14 +98,32 @@ const LoginScreen = ({ onLogin }) => {
     }
   }, [selectedProjectId, selectedProject]);
 
-  const handleLogin = () => {
-    if (isLoginEnabled) {
-      onLogin({
-        project: selectedProject,
-        role: selectedRole,
-        name: userName.trim()
-      });
+  useEffect(() => {
+    setLoginError('');
+    if (selectedRole !== 'Manager') {
+      setManagerPassword('');
     }
+  }, [selectedRole, selectedProjectId]);
+
+  const handleLogin = async () => {
+    if (!isLoginEnabled) return;
+    setLoginError('');
+
+    if (requiresManagerPassword) {
+      try {
+        await api.verifyManagerPassword(selectedProjectId, managerPassword);
+      } catch (error) {
+        console.error('Manager password verification failed', error);
+        setLoginError(error.message || 'Invalid manager password');
+        return;
+      }
+    }
+
+    onLogin({
+      project: selectedProject,
+      role: selectedRole,
+      name: userName.trim()
+    });
   };
 
   const handleOpenCreateModal = () => {
@@ -102,29 +137,81 @@ const LoginScreen = ({ onLogin }) => {
     resetCreateProjectState();
   };
 
-  const numberToTimeString = (value, mode = 'time') => {
-    if (typeof value !== 'number') return null;
-    const totalSeconds = Math.round(value * 24 * 60 * 60);
-    if (mode === 'duration') {
-      const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-      const seconds = String(totalSeconds % 60).padStart(2, '0');
-      return `${minutes}:${seconds}`;
-    }
+const numberToTimeString = (value) => {
+  if (typeof value !== 'number') return null;
+  const totalSeconds = Math.round(value * 24 * 60 * 60);
     const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
     const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
     const seconds = String(totalSeconds % 60).padStart(2, '0');
     return `${hours}:${minutes}:${seconds}`;
   };
 
-  const normalizeTimeValue = (value, fallback, mode = 'time') => {
+const normalizeDuration = (value, fallback) => {
+  if (value == null || value === '') return fallback;
+  
+  // If it's a number (Excel time serial), convert to mm:ss
+  if (typeof value === 'number') {
+    const totalSeconds = Math.round(value * 24 * 60);
+    const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+    const seconds = String(totalSeconds % 60).padStart(2, '0');
+    return `${minutes}:${seconds}`;
+  }
+  
+  // If it's a string, parse and normalize to mm:ss
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return fallback;
+    
+    // Check if it's already in mm:ss format
+    const mmssPattern = /^(\d{1,2}):(\d{2})$/;
+    const mmssMatch = trimmed.match(mmssPattern);
+    if (mmssMatch) {
+      const minutes = String(parseInt(mmssMatch[1], 10)).padStart(2, '0');
+      const seconds = String(parseInt(mmssMatch[2], 10)).padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    }
+    
+    // Check if it's in hh:mm:ss format, extract mm:ss
+    const hhmmssPattern = /^(\d{1,2}):(\d{2}):(\d{2})$/;
+    const hhmmssMatch = trimmed.match(hhmmssPattern);
+    if (hhmmssMatch) {
+      const minutes = String(parseInt(hhmmssMatch[2], 10)).padStart(2, '0');
+      const seconds = String(parseInt(hhmmssMatch[3], 10)).padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    }
+    
+    // If it's just a number as string (seconds), convert to mm:ss
+    const numValue = Number(trimmed);
+    if (!Number.isNaN(numValue)) {
+      const totalSeconds = Math.round(numValue);
+      const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+      const seconds = String(totalSeconds % 60).padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    }
+    
+    // If no pattern matches, return as-is (might be invalid, but preserve it)
+    return trimmed;
+  }
+  
+  return fallback;
+};
+
+const normalizeTimeValue = (value, fallback, mode = 'time') => {
     if (value == null || value === '') return fallback;
+  if (mode === 'time') {
     if (typeof value === 'number') {
-      return numberToTimeString(value, mode) || fallback;
+      return numberToTimeString(value) || fallback;
     }
     if (typeof value === 'string') {
       return value.trim() || fallback;
     }
     return fallback;
+  }
+  // duration: normalize to mm:ss format
+  if (mode === 'duration') {
+    return normalizeDuration(value, fallback);
+  }
+  return fallback;
   };
 
   const handleFileUpload = async (event) => {
@@ -190,6 +277,7 @@ const LoginScreen = ({ onLogin }) => {
 
   const handleCreateProject = async () => {
     const trimmedName = newProjectName.trim();
+    const trimmedPassword = newProjectPassword.trim();
     if (!trimmedName) {
       setImportError('Project name is required.');
       return;
@@ -205,9 +293,15 @@ const LoginScreen = ({ onLogin }) => {
       const createdProject = await api.importProject({
         name: trimmedName,
         rows: importRows,
+        managerPassword: trimmedPassword || undefined,
       });
       await fetchProjects();
       setSelectedProjectId(createdProject.id);
+      if (trimmedPassword) {
+        setManagerPassword(trimmedPassword);
+      } else {
+        setManagerPassword('');
+      }
       setIsCreateModalOpen(false);
       resetCreateProjectState();
     } catch (error) {
@@ -226,6 +320,11 @@ const LoginScreen = ({ onLogin }) => {
         <Typography color="error" sx={{ mt: 1 }}>
           {loadError}
         </Typography>
+      )}
+      {loginError && !isLoadingProjects && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {loginError}
+        </Alert>
       )}
       
       <TextField
@@ -266,6 +365,30 @@ const LoginScreen = ({ onLogin }) => {
           ))}
         </Select>
       </FormControl>
+
+      {requiresManagerPassword && (
+        <TextField
+          value={managerPassword}
+          onChange={(e) => setManagerPassword(e.target.value)}
+          label="Manager Password"
+          type={showManagerPassword ? 'text' : 'password'}
+          required
+          sx={{ m: 1, minWidth: 300 }}
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton
+                  onClick={() => setShowManagerPassword(prev => !prev)}
+                  edge="end"
+                  size="small"
+                >
+                  {showManagerPassword ? <Visibility /> : <VisibilityOff />}
+                </IconButton>
+              </InputAdornment>
+            )
+          }}
+        />
+      )}
 
       <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
         <Button variant="outlined" color="primary" onClick={handleOpenCreateModal}>
@@ -310,6 +433,26 @@ const LoginScreen = ({ onLogin }) => {
                 onChange={handleFileUpload}
               />
             </Button>
+            <TextField
+              label="Manager Password (optional)"
+              type={showNewProjectPassword ? 'text' : 'password'}
+              value={newProjectPassword}
+              onChange={(e) => setNewProjectPassword(e.target.value)}
+              fullWidth
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      onClick={() => setShowNewProjectPassword(prev => !prev)}
+                      edge="end"
+                      size="small"
+                    >
+                      {showNewProjectPassword ? <Visibility /> : <VisibilityOff />}
+                    </IconButton>
+                  </InputAdornment>
+                )
+              }}
+            />
             {selectedFileName && (
               <Typography variant="body2">
                 Selected file: {selectedFileName}

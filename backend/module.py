@@ -1,6 +1,7 @@
 # backend/module.py
 
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 
 db = SQLAlchemy()
@@ -13,6 +14,7 @@ class Project(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name = db.Column(db.String(255), nullable=False, unique=True)
     version = db.Column(db.String(50), nullable=False, default='v1.0.0')
+    manager_password_hash = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -21,12 +23,26 @@ class Project(db.Model):
     roles = db.relationship('ProjectRole', backref='project', lazy=True, cascade='all, delete-orphan')
     periodic_scripts = db.relationship('PeriodicScript', backref='project', lazy=True, cascade='all, delete-orphan')
     
+    def set_manager_password(self, raw_password: str):
+        if raw_password:
+            self.manager_password_hash = generate_password_hash(raw_password)
+        else:
+            self.manager_password_hash = None
+
+    def check_manager_password(self, raw_password: str) -> bool:
+        if not self.manager_password_hash:
+            return True
+        if not raw_password:
+            return False
+        return check_password_hash(self.manager_password_hash, raw_password)
+    
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
             'version': self.version,
-            'roles': [pr.role_name for pr in self.roles]
+            'roles': [pr.role_name for pr in self.roles],
+            'is_locked': self.manager_password_hash is not None
         }
 
 

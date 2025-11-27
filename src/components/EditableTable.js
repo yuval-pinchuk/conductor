@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
-  Paper, IconButton, Checkbox, Select, MenuItem, TextField, Button,
+  Paper, IconButton, Select, MenuItem, TextField, Button,
   Typography 
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -13,7 +13,6 @@ import ToggleOnIcon from '@mui/icons-material/ToggleOn';
 import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
-import { ALL_AVAILABLE_ROLES } from '../data';
 
 // Helper for time input with +/-
 const TimeInput = ({ value, onChange, format }) => {
@@ -380,7 +379,7 @@ const EditableTable = ({
                     {/* Phase Activation Toggle */}
                     {isManager && (
                         <IconButton 
-                            onClick={() => handleTogglePhaseActivation(phase.phase)} 
+                            onClick={() => handleTogglePhaseActivation(phase)} 
                             size="small" 
                             color={isPhaseActive ? 'success' : 'secondary'}
                             title={isPhaseActive ? "Deactivate Phase" : "Activate Phase"}

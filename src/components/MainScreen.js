@@ -56,6 +56,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [dataError, setDataError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
   
   // Clock State Management
   const [totalSeconds, setTotalSeconds] = useState(0);
@@ -82,7 +83,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const handleRowStatusChange = async (rowId, status) => {
     try {
       await api.updateRow(rowId, { status });
-      applyRowUpdates(rowId, { status });
+      await loadProjectData();
     } catch (error) {
       console.error('Failed to update row status', error);
       setDataError(error.message || 'Failed to update row status');
@@ -275,6 +276,24 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   };
 
+  const handleDeleteProject = async () => {
+    if (!isManager || isDeletingProject || !projectDetails) return;
+    const confirmDelete = window.confirm(`Delete project "${projectDetails.name}"? This cannot be undone.`);
+    if (!confirmDelete) return;
+
+    setIsDeletingProject(true);
+    setDataError('');
+    try {
+      await api.deleteProject(projectDetails.id);
+      onLogout();
+    } catch (error) {
+      console.error('Failed to delete project', error);
+      setDataError(error.message || 'Failed to delete project');
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
   const handleCancel = () => {
     // 2. Revert to the deep clone saved at the start of the session
     setCurrentTableData(originalTableData); 
@@ -359,9 +378,21 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           onRunRowScript={handleRunRowScript}
         />
         
-        <Button onClick={onLogout} variant="outlined" style={{ marginTop: 20 }}>
-          Logout
-        </Button>
+        <div style={{ marginTop: 20, display: 'flex', gap: 12 }}>
+          <Button onClick={onLogout} variant="outlined">
+            Logout
+          </Button>
+          {isManager && (
+            <Button
+              onClick={handleDeleteProject}
+              variant="contained"
+              color="error"
+              disabled={isDeletingProject}
+            >
+              {isDeletingProject ? 'Deleting...' : 'Delete Project'}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
