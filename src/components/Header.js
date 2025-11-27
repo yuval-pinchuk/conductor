@@ -27,7 +27,8 @@ const Header = ({
     handleSetTargetClockTime,
     handleClearTargetClockTime,
     targetDateTime,
-    isUsingTargetTime
+    isUsingTargetTime,
+    isSaving = false
 }) => {
   const [isEditingClock, setIsEditingClock] = useState(false);
   const [tempClockInput, setTempClockInput] = useState(clockTime);
@@ -176,10 +177,10 @@ const Header = ({
         <div>
           {isEditing ? (
             <>
-              <IconButton color="inherit" onClick={onSave} title="Save Changes">
+              <IconButton color="inherit" onClick={onSave} title="Save Changes" disabled={isSaving}>
                 <CheckIcon /> {/* V button */}
               </IconButton>
-              <IconButton color="inherit" onClick={onCancel} title="Cancel Changes">
+              <IconButton color="inherit" onClick={onCancel} title="Cancel Changes" disabled={isSaving}>
                 <CloseIcon /> {/* X button */}
               </IconButton>
             </>

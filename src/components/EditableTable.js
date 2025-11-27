@@ -88,7 +88,9 @@ const EditableTable = ({
     periodicScripts,
     setPeriodicScripts,
     currentClockSeconds,
-    isClockRunning }) => {
+    isClockRunning,
+    onRowStatusChange,
+    onRunRowScript }) => {
   
   const [newRole, setNewRole] = useState('');
   
@@ -105,21 +107,26 @@ const EditableTable = ({
     setTableData(newPhases);
   };
 
-  const handleRunScript = async (phaseIndex, rowIndex, scriptPath) => {
-    if (scriptPath) {
-      console.log(`[SCRIPT RUNNER] Attempting to execute script at: ${scriptPath}`);
-      
-      // Simulate script execution - in real implementation, this would call an API
-      // For now, randomly return true/false to demonstrate the feature
-      // Replace this with actual API call that returns boolean
-      const scriptResult = Math.random() > 0.5; // Simulated result
-      
-      // Update the row with the script result
-      const newPhases = [...tableData];
-      newPhases[phaseIndex].rows[rowIndex].scriptResult = scriptResult;
-      setTableData(newPhases);
-      
-      console.log(`[SCRIPT RUNNER] Script result: ${scriptResult}`);
+  const handleRowStatusSelection = async (phaseIndex, rowIndex, statusValue) => {
+    handleChange(phaseIndex, rowIndex, 'status', statusValue);
+    const row = tableData[phaseIndex].rows[rowIndex];
+    if (row && typeof onRowStatusChange === 'function') {
+      try {
+        await onRowStatusChange(row.id, statusValue);
+      } catch (error) {
+        console.error('Failed to update row status', error);
+      }
+    }
+  };
+
+  const handleRunScript = async (phaseIndex, rowIndex) => {
+    const row = tableData[phaseIndex].rows[rowIndex];
+    if (row?.script && typeof onRunRowScript === 'function') {
+      try {
+        await onRunRowScript(row.id, row.script);
+      } catch (error) {
+        console.error('Failed to run script', error);
+      }
     }
   };
 
@@ -534,7 +541,7 @@ const EditableTable = ({
                             size="small"
                             color="primary"
                             startIcon={<PlayArrowIcon />}
-                            onClick={() => handleRunScript(phaseIndex, rowIndex, row.script)}
+                            onClick={() => handleRunScript(phaseIndex, rowIndex)}
                           >
                             Run Script
                           </Button>
@@ -556,7 +563,7 @@ const EditableTable = ({
                   <TableCell>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <IconButton
-                        onClick={() => handleChange(phaseIndex, rowIndex, 'status', 'Passed')}
+                        onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
                         size="small"
                         disabled={!canChangeStatus}
                         color={row.status === 'Passed' ? 'success' : 'default'}
@@ -565,7 +572,7 @@ const EditableTable = ({
                         <CheckIcon />
                       </IconButton>
                       <IconButton
-                        onClick={() => handleChange(phaseIndex, rowIndex, 'status', 'Failed')}
+                        onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Failed')}
                         size="small"
                         disabled={!canChangeStatus}
                         color={row.status === 'Failed' ? 'error' : 'default'}

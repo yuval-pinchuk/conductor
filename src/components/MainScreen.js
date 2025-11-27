@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
-import { INITIAL_TABLE_DATA, ALL_AVAILABLE_ROLES } from '../data';
-import { Button } from '@mui/material';
+import { Button, Typography, CircularProgress } from '@mui/material';
+import { api } from '../api/conductorApi';
 
 const useInterval = (callback, delay) => {
   const savedCallback = React.useRef();
@@ -33,6 +33,7 @@ const formatTime = (totalSeconds) => {
 
 const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === 'Manager';
+  const [projectDetails, setProjectDetails] = useState(project);
   
   // State for the project version
   const [currentVersion, setCurrentVersion] = useState(project.version);
@@ -40,22 +41,21 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [originalVersion, setOriginalVersion] = useState(project.version);
   
   const [isEditing, setIsEditing] = useState(false);
-  const [originalTableData, setOriginalTableData] = useState(INITIAL_TABLE_DATA);
-  const [currentTableData, setCurrentTableData] = useState(INITIAL_TABLE_DATA);
-  const [allRoles, setAllRoles] = useState(ALL_AVAILABLE_ROLES);
+  const [originalTableData, setOriginalTableData] = useState([]);
+  const [currentTableData, setCurrentTableData] = useState([]);
+  const [allRoles, setAllRoles] = useState([]);
   
   // Phase Activation State
   const [activePhases, setActivePhases] = useState({}); // Example: { 1: true, 2: false }
   
   // Periodic Scripts State
-  const [periodicScripts, setPeriodicScripts] = useState([
-    { id: 1, name: 'Health Check', path: '/scripts/health.js', status: true },
-    { id: 2, name: 'Backup', path: '/scripts/backup.js', status: false }
-  ]);
-  const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([
-    { id: 1, name: 'Health Check', path: '/scripts/health.js', status: true },
-    { id: 2, name: 'Backup', path: '/scripts/backup.js', status: false }
-  ]);
+  const [periodicScripts, setPeriodicScripts] = useState([]);
+  const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([]);
+
+  // Loading states
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [dataError, setDataError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
   
   // Clock State Management
   const [totalSeconds, setTotalSeconds] = useState(0);
@@ -64,12 +64,62 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [targetDateTime, setTargetDateTime] = useState('');
   const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
   
-  const handleTogglePhaseActivation = (phaseNumber) => {
-    if (!isManager) return;
-    setActivePhases(prev => ({
-      ...prev,
-      [phaseNumber]: !prev[phaseNumber] // Toggle the status
+  const patchRows = (data, rowId, updates) =>
+    data.map(phase => ({
+      ...phase,
+      rows: phase.rows.map(row =>
+        row.id === rowId ? { ...row, ...updates } : row
+      ),
     }));
+
+  const applyRowUpdates = (rowId, updates, { syncOriginal = true } = {}) => {
+    setCurrentTableData(prev => patchRows(prev, rowId, updates));
+    if (syncOriginal) {
+      setOriginalTableData(prev => patchRows(prev, rowId, updates));
+    }
+  };
+
+  const handleRowStatusChange = async (rowId, status) => {
+    try {
+      await api.updateRow(rowId, { status });
+      applyRowUpdates(rowId, { status });
+    } catch (error) {
+      console.error('Failed to update row status', error);
+      setDataError(error.message || 'Failed to update row status');
+      await loadProjectData();
+      throw error;
+    }
+  };
+
+  const handleRunRowScript = async (rowId) => {
+    try {
+      const { result } = await api.runRowScript(rowId);
+      applyRowUpdates(rowId, { scriptResult: result });
+    } catch (error) {
+      console.error('Failed to run script', error);
+      setDataError(error.message || 'Failed to run script');
+      throw error;
+    }
+  };
+
+  const handleTogglePhaseActivation = async (phase) => {
+    if (!isManager) return;
+    try {
+      const updatedPhase = await api.togglePhaseActive(phase.id);
+      setActivePhases(prev => ({
+        ...prev,
+        [updatedPhase.phase]: !!updatedPhase.is_active
+      }));
+      const updater = (data) =>
+        data.map(p =>
+          p.id === updatedPhase.id ? { ...p, is_active: updatedPhase.is_active } : p
+        );
+      setCurrentTableData(updater);
+      setOriginalTableData(updater);
+    } catch (error) {
+      console.error('Failed to toggle phase', error);
+      setDataError(error.message || 'Failed to toggle phase');
+    }
   };
 
   const handleSetClockTime = (timeString) => {
@@ -139,25 +189,47 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   }, (isUsingTargetTime && targetDateTime) || isRunning ? 1000 : null);
 
-  // Periodic Script Execution Hook - runs every 5 seconds
-  useInterval(async () => {
-    if (periodicScripts.length > 0) {
-      const updatedScripts = await Promise.all(
-        periodicScripts.map(async (script) => {
-          if (script.path) {
-            // Simulate script execution - in real implementation, this would call an API
-            // Replace this with actual API call that returns boolean
-            const result = Math.random() > 0.5; // Simulated result
-            
-            console.log(`[PERIODIC SCRIPT] ${script.name} (${script.path}): ${result}`);
-            return { ...script, status: result };
-          }
-          return script;
-        })
+  const normalizePhases = useCallback((phases = []) => phases.map(phase => ({
+    ...phase,
+    rows: Array.isArray(phase.rows) ? phase.rows : [],
+  })), []);
+
+  const loadProjectData = useCallback(async () => {
+    setIsLoadingData(true);
+    setDataError('');
+    try {
+      const [projectResponse, phasesResponse, scriptsResponse] = await Promise.all([
+        api.getProjectById(project.id),
+        api.getPhases(project.id),
+        api.getPeriodicScripts(project.id),
+      ]);
+
+      setProjectDetails(projectResponse);
+      setCurrentVersion(projectResponse.version);
+      setOriginalVersion(projectResponse.version);
+      const normalizedPhases = normalizePhases(phasesResponse);
+      setCurrentTableData(normalizedPhases);
+      setOriginalTableData(JSON.parse(JSON.stringify(normalizedPhases)));
+      setAllRoles(projectResponse.roles || []);
+      setActivePhases(
+        normalizedPhases.reduce((acc, phase) => {
+          acc[phase.phase] = !!phase.is_active;
+          return acc;
+        }, {})
       );
-      setPeriodicScripts(updatedScripts);
+      setPeriodicScripts(scriptsResponse);
+      setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsResponse)));
+    } catch (error) {
+      console.error('Failed to load project data', error);
+      setDataError(error.message || 'Failed to load data');
+    } finally {
+      setIsLoadingData(false);
     }
-  }, 5000); // Run every 5 seconds
+  }, [project.id, normalizePhases]);
+
+  useEffect(() => {
+    loadProjectData();
+  }, [loadProjectData]);
 
   const handleToggleEdit = () => {
     if (!isEditing && role === 'Manager') {
@@ -174,13 +246,33 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   };
 
-  const handleSave = () => {
-    // 1. Update the official original state with the current state (still using a deep copy)
-    setOriginalTableData(JSON.parse(JSON.stringify(currentTableData))); 
-    setOriginalPeriodicScripts(JSON.parse(JSON.stringify(periodicScripts)));
-    setOriginalVersion(currentVersion); 
-    setIsEditing(false);
-    console.log("Changes Saved. New Version:", currentVersion);
+  const handleSave = async () => {
+    setIsSaving(true);
+    setDataError('');
+    try {
+      await Promise.all([
+        api.updateProjectVersion(project.id, currentVersion),
+        api.updateTableData(project.id, currentTableData),
+        api.updatePeriodicScriptsBulk(project.id, periodicScripts),
+      ]);
+      const clonedData = JSON.parse(JSON.stringify(currentTableData));
+      const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
+      setOriginalTableData(clonedData);
+      setOriginalPeriodicScripts(clonedScripts);
+      setOriginalVersion(currentVersion);
+      setProjectDetails(prev => ({
+        ...prev,
+        version: currentVersion,
+        roles: allRoles,
+      }));
+      setIsEditing(false);
+      console.log("Changes Saved. New Version:", currentVersion);
+    } catch (error) {
+      console.error('Failed to save changes', error);
+      setDataError(error.message || 'Failed to save changes');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCancel = () => {
@@ -192,10 +284,35 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     console.log("Changes Canceled. Reverted to original data and version.");
   };
 
+  if (isLoadingData) {
+    return (
+      <div style={{ padding: 20 }}>
+        <CircularProgress />
+        <Typography sx={{ mt: 2 }}>Loading project data...</Typography>
+        {dataError && (
+          <Typography color="error" sx={{ mt: 1 }}>
+            {dataError}
+          </Typography>
+        )}
+      </div>
+    );
+  }
+
+  if (dataError) {
+    return (
+      <div style={{ padding: 20 }}>
+        <Typography color="error">{dataError}</Typography>
+        <Button variant="contained" sx={{ mt: 2 }} onClick={loadProjectData}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div>
       <Header
-        project={project}
+        project={projectDetails}
         role={role}
         name={name}
         isEditing={isEditing}
@@ -212,6 +329,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         handleClearTargetClockTime={handleClearTargetClockTime}
         targetDateTime={targetDateTime}
         isUsingTargetTime={isUsingTargetTime}
+        isSaving={isSaving}
         
         onToggleEdit={handleToggleEdit}
         onSave={handleSave}
@@ -237,6 +355,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           setPeriodicScripts={setPeriodicScripts}
           currentClockSeconds={totalSeconds}
           isClockRunning={isRunning || (isUsingTargetTime && !!targetDateTime)}
+          onRowStatusChange={handleRowStatusChange}
+          onRunRowScript={handleRunRowScript}
         />
         
         <Button onClick={onLogout} variant="outlined" style={{ marginTop: 20 }}>
