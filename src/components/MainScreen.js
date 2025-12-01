@@ -83,11 +83,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const handleRowStatusChange = async (rowId, status) => {
     try {
       await api.updateRow(rowId, { status });
-      await loadProjectData();
+      await loadProjectData(false);
     } catch (error) {
       console.error('Failed to update row status', error);
       setDataError(error.message || 'Failed to update row status');
-      await loadProjectData();
+      await loadProjectData(false);
       throw error;
     }
   };
@@ -117,6 +117,12 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         );
       setCurrentTableData(updater);
       setOriginalTableData(updater);
+      // Trigger a refresh after a short delay to sync with server
+      setTimeout(() => {
+        if (!isEditing) {
+          loadProjectData(false);
+        }
+      }, 500);
     } catch (error) {
       console.error('Failed to toggle phase', error);
       setDataError(error.message || 'Failed to toggle phase');
@@ -195,8 +201,10 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     rows: Array.isArray(phase.rows) ? phase.rows : [],
   })), []);
 
-  const loadProjectData = useCallback(async () => {
-    setIsLoadingData(true);
+  const loadProjectData = useCallback(async (isInitialLoad = false) => {
+    if (isInitialLoad) {
+      setIsLoadingData(true);
+    }
     setDataError('');
     try {
       const [projectResponse, phasesResponse, scriptsResponse] = await Promise.all([
@@ -206,31 +214,105 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       ]);
 
       setProjectDetails(projectResponse);
-      setCurrentVersion(projectResponse.version);
-      setOriginalVersion(projectResponse.version);
+      
+      // Only update version if not in edit mode or if it's the initial load
+      if (!isEditing || isInitialLoad) {
+        setCurrentVersion(projectResponse.version);
+        if (isInitialLoad) {
+          setOriginalVersion(projectResponse.version);
+        }
+      }
+      
       const normalizedPhases = normalizePhases(phasesResponse);
-      setCurrentTableData(normalizedPhases);
-      setOriginalTableData(JSON.parse(JSON.stringify(normalizedPhases)));
+      
+      // If in edit mode, merge changes intelligently (preserve local edits)
+      if (isEditing && !isInitialLoad) {
+        setCurrentTableData(prevData => {
+          // Merge phase activations
+          const newActivePhases = normalizedPhases.reduce((acc, phase) => {
+            acc[phase.phase] = !!phase.is_active;
+            return acc;
+          }, {});
+          setActivePhases(newActivePhases);
+          
+          // Merge row status changes and script results
+          const mergedPhases = prevData.map(localPhase => {
+            const serverPhase = normalizedPhases.find(sp => sp.id === localPhase.id);
+            if (!serverPhase) return localPhase;
+            
+            // Merge rows - update status and scriptResult from server, keep local edits for other fields
+            const mergedRows = localPhase.rows.map(localRow => {
+              const serverRow = serverPhase.rows.find(sr => sr.id === localRow.id);
+              if (!serverRow) return localRow;
+              
+              // Update status and scriptResult from server, but keep other local edits
+              return {
+                ...localRow,
+                status: serverRow.status,
+                scriptResult: serverRow.scriptResult,
+              };
+            });
+            
+            // Add any new rows from server
+            const newRows = serverPhase.rows.filter(sr => 
+              !localPhase.rows.some(lr => lr.id === sr.id)
+            );
+            
+            return {
+              ...localPhase,
+              is_active: serverPhase.is_active,
+              rows: [...mergedRows, ...newRows],
+            };
+          });
+          
+          // Add any new phases from server
+          const newPhases = normalizedPhases.filter(sp => 
+            !prevData.some(lp => lp.id === sp.id)
+          );
+          
+          return [...mergedPhases, ...newPhases];
+        });
+      } else {
+        // Not in edit mode - full sync
+        setCurrentTableData(normalizedPhases);
+        if (isInitialLoad) {
+          setOriginalTableData(JSON.parse(JSON.stringify(normalizedPhases)));
+        }
+        setActivePhases(
+          normalizedPhases.reduce((acc, phase) => {
+            acc[phase.phase] = !!phase.is_active;
+            return acc;
+          }, {})
+        );
+      }
+      
       setAllRoles(projectResponse.roles || []);
-      setActivePhases(
-        normalizedPhases.reduce((acc, phase) => {
-          acc[phase.phase] = !!phase.is_active;
-          return acc;
-        }, {})
-      );
       setPeriodicScripts(scriptsResponse);
-      setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsResponse)));
+      if (isInitialLoad) {
+        setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsResponse)));
+      }
     } catch (error) {
       console.error('Failed to load project data', error);
-      setDataError(error.message || 'Failed to load data');
+      if (isInitialLoad) {
+        setDataError(error.message || 'Failed to load data');
+      }
     } finally {
-      setIsLoadingData(false);
+      if (isInitialLoad) {
+        setIsLoadingData(false);
+      }
     }
-  }, [project.id, normalizePhases]);
+  }, [project.id, normalizePhases, isEditing]);
 
   useEffect(() => {
-    loadProjectData();
-  }, [loadProjectData]);
+    loadProjectData(true);
+  }, [project.id]);
+
+  // Poll for updates every 2 seconds when not in edit mode
+  useInterval(() => {
+    if (!isEditing && !isLoadingData && !isSaving) {
+      loadProjectData(false);
+    }
+  }, 2000);
 
   const handleToggleEdit = () => {
     if (!isEditing && role === 'Manager') {
