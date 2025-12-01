@@ -35,6 +35,33 @@ def update_project_version(project_id):
     return jsonify(project.to_dict()), 200
 
 
+@api.route('/api/projects/<int:project_id>/clock', methods=['PUT'])
+def update_project_clock(project_id):
+    """Update project clock state"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    if 'totalSeconds' in data:
+        project.clock_total_seconds = data.get('totalSeconds', 0)
+    if 'isRunning' in data:
+        project.clock_is_running = data.get('isRunning', False)
+    if 'targetDateTime' in data:
+        target_dt_str = data.get('targetDateTime')
+        if target_dt_str:
+            try:
+                project.clock_target_datetime = datetime.fromisoformat(target_dt_str.replace('Z', '+00:00'))
+            except:
+                project.clock_target_datetime = None
+        else:
+            project.clock_target_datetime = None
+    if 'isUsingTargetTime' in data:
+        project.clock_is_using_target_time = data.get('isUsingTargetTime', False)
+    
+    project.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(project.to_dict()), 200
+
+
 @api.route('/api/projects/import', methods=['POST'])
 def import_project():
     """Create a new project from uploaded rows"""
@@ -42,6 +69,7 @@ def import_project():
     name = (data.get('name') or '').strip()
     rows_data = data.get('rows') or []
     manager_password = (data.get('managerPassword') or '').strip()
+    manager_role = (data.get('managerRole') or '').strip()
 
     if not name:
         return jsonify({'error': 'Project name is required'}), 400
@@ -56,6 +84,8 @@ def import_project():
         project = Project(name=name)
         if manager_password:
             project.set_manager_password(manager_password)
+        if manager_role:
+            project.manager_role = manager_role
         db.session.add(project)
         db.session.flush()
 

@@ -32,7 +32,7 @@ const formatTime = (totalSeconds) => {
 };
 
 const MainScreen = ({ project, role, name, onLogout }) => {
-  const isManager = role === 'Manager';
+  const isManager = role === project.manager_role;
   const [projectDetails, setProjectDetails] = useState(project);
   
   // State for the project version
@@ -58,12 +58,12 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   
-  // Clock State Management
-  const [totalSeconds, setTotalSeconds] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const [isCountDown, setIsCountDown] = useState(false); // Tracks if initial count was negative
-  const [targetDateTime, setTargetDateTime] = useState('');
-  const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
+  // Clock State Management - initialize from project if available
+  const [totalSeconds, setTotalSeconds] = useState(project.clock_total_seconds || 0);
+  const [isRunning, setIsRunning] = useState(project.clock_is_running || false);
+  const [isCountDown, setIsCountDown] = useState((project.clock_total_seconds || 0) < 0);
+  const [targetDateTime, setTargetDateTime] = useState(project.clock_target_datetime || '');
+  const [isUsingTargetTime, setIsUsingTargetTime] = useState(project.clock_is_using_target_time || false);
   
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -129,19 +129,34 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   };
 
-  const handleSetClockTime = (timeString) => {
+  const handleSetClockTime = async (timeString) => {
     setIsUsingTargetTime(false);
     setTargetDateTime('');
     // Expects input like "+hh:mm:ss" or "-hh:mm:ss"
     const sign = timeString.startsWith('-') ? -1 : 1;
     const parts = timeString.substring(1).split(':').map(Number);
     const seconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    const newTotalSeconds = seconds * sign;
     
-    setTotalSeconds(seconds * sign);
+    setTotalSeconds(newTotalSeconds);
     setIsCountDown(sign === -1);
+    
+    // Sync to server if manager
+    if (isManager) {
+      try {
+        await api.updateProjectClock(project.id, {
+          totalSeconds: newTotalSeconds,
+          isRunning: false,
+          targetDateTime: null,
+          isUsingTargetTime: false
+        });
+      } catch (error) {
+        console.error('Failed to update clock on server', error);
+      }
+    }
   };
   
-  const handleSetTargetClockTime = (isoString) => {
+  const handleSetTargetClockTime = async (isoString) => {
     if (!isoString) return;
     const targetMs = new Date(isoString).getTime();
     if (Number.isNaN(targetMs)) return;
@@ -151,16 +166,52 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setTotalSeconds(diffSeconds);
     setIsCountDown(diffSeconds < 0);
     setIsRunning(false);
+    
+    // Sync to server if manager
+    if (isManager) {
+      try {
+        await api.updateProjectClock(project.id, {
+          totalSeconds: diffSeconds,
+          isRunning: false,
+          targetDateTime: isoString,
+          isUsingTargetTime: true
+        });
+      } catch (error) {
+        console.error('Failed to update clock on server', error);
+      }
+    }
   };
 
-  const handleClearTargetClockTime = () => {
+  const handleClearTargetClockTime = async () => {
     setTargetDateTime('');
     setIsUsingTargetTime(false);
+    
+    // Sync to server if manager
+    if (isManager) {
+      try {
+        await api.updateProjectClock(project.id, {
+          targetDateTime: null,
+          isUsingTargetTime: false
+        });
+      } catch (error) {
+        console.error('Failed to update clock on server', error);
+      }
+    }
   };
   
-  const handleToggleClock = () => {
+  const handleToggleClock = async () => {
     if (!isManager || isUsingTargetTime) return;
-    setIsRunning(prev => !prev);
+    const newIsRunning = !isRunning;
+    setIsRunning(newIsRunning);
+    
+    // Sync to server
+    try {
+      await api.updateProjectClock(project.id, {
+        isRunning: newIsRunning
+      });
+    } catch (error) {
+      console.error('Failed to update clock on server', error);
+    }
   };
 
   // Clock Interval Hook
@@ -171,11 +222,19 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
         setTotalSeconds(diffSeconds);
         setIsCountDown(diffSeconds < 0);
+        
+        // Sync to server if manager and running
+        if (isManager && isRunning) {
+          api.updateProjectClock(project.id, {
+            totalSeconds: diffSeconds,
+            isUsingTargetTime: true
+          }).catch(err => console.error('Failed to sync clock', err));
+        }
       }
       return;
     }
 
-    if (!isUsingTargetTime) {
+    if (!isUsingTargetTime && isRunning) {
       setTotalSeconds(prevSeconds => {
         let newSeconds = prevSeconds;
         
@@ -189,6 +248,13 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             newSeconds = 0;
           }
           newSeconds += 1; // Count forward
+        }
+        
+        // Sync to server if manager
+        if (isManager) {
+          api.updateProjectClock(project.id, {
+            totalSeconds: newSeconds
+          }).catch(err => console.error('Failed to sync clock', err));
         }
         
         return newSeconds;
@@ -215,12 +281,35 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
       setProjectDetails(projectResponse);
       
-      // Only update version if not in edit mode or if it's the initial load
-      if (!isEditing || isInitialLoad) {
+      // Always sync version from server when not in edit mode
+      // When in edit mode, only update if it's the initial load or if version changed on server
+      if (!isEditing) {
         setCurrentVersion(projectResponse.version);
         if (isInitialLoad) {
           setOriginalVersion(projectResponse.version);
         }
+      } else if (isInitialLoad) {
+        setCurrentVersion(projectResponse.version);
+        setOriginalVersion(projectResponse.version);
+      } else {
+        // In edit mode but not initial load - check if version changed on server
+        // Only update if it's different from our current version and we haven't edited it
+        if (projectResponse.version !== currentVersion && projectResponse.version === originalVersion) {
+          setCurrentVersion(projectResponse.version);
+        }
+      }
+      
+      // Sync clock state from server (always, for all users)
+      if (projectResponse.clock_total_seconds !== undefined) {
+        setTotalSeconds(projectResponse.clock_total_seconds);
+        setIsCountDown(projectResponse.clock_total_seconds < 0);
+      }
+      if (projectResponse.clock_is_running !== undefined) {
+        setIsRunning(projectResponse.clock_is_running);
+      }
+      if (projectResponse.clock_target_datetime !== undefined) {
+        setTargetDateTime(projectResponse.clock_target_datetime || '');
+        setIsUsingTargetTime(projectResponse.clock_is_using_target_time || false);
       }
       
       const normalizedPhases = normalizePhases(phasesResponse);
@@ -315,7 +404,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   }, 2000);
 
   const handleToggleEdit = () => {
-    if (!isEditing && role === 'Manager') {
+    if (!isEditing && isManager) {
       // Create a DEEP CLONE of the table data to prevent mutation
       const clonedData = JSON.parse(JSON.stringify(currentTableData)); 
       const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));

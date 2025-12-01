@@ -43,6 +43,7 @@ const LoginScreen = ({ onLogin }) => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectPassword, setNewProjectPassword] = useState('');
+  const [newProjectManagerRole, setNewProjectManagerRole] = useState('');
   const [showManagerPassword, setShowManagerPassword] = useState(false);
   const [showNewProjectPassword, setShowNewProjectPassword] = useState(false);
   const [importRows, setImportRows] = useState([]);
@@ -53,6 +54,7 @@ const LoginScreen = ({ onLogin }) => {
   const resetCreateProjectState = () => {
     setNewProjectName('');
     setNewProjectPassword('');
+    setNewProjectManagerRole('');
     setImportRows([]);
     setSelectedFileName('');
     setImportError('');
@@ -79,7 +81,7 @@ const LoginScreen = ({ onLogin }) => {
   }, [fetchProjects]);
 
   const selectedProject = projects.find(p => p.id === selectedProjectId);
-  const requiresManagerPassword = selectedRole === 'Manager' && selectedProject?.is_locked;
+  const requiresManagerPassword = selectedRole === selectedProject?.manager_role && selectedProject?.is_locked;
   const isLoginEnabled = Boolean(
     selectedProjectId &&
     selectedRole &&
@@ -100,10 +102,10 @@ const LoginScreen = ({ onLogin }) => {
 
   useEffect(() => {
     setLoginError('');
-    if (selectedRole !== 'Manager') {
+    if (selectedRole !== selectedProject?.manager_role) {
       setManagerPassword('');
     }
-  }, [selectedRole, selectedProjectId]);
+  }, [selectedRole, selectedProjectId, selectedProject]);
 
   const handleLogin = async () => {
     if (!isLoginEnabled) return;
@@ -278,12 +280,17 @@ const normalizeTimeValue = (value, fallback, mode = 'time') => {
   const handleCreateProject = async () => {
     const trimmedName = newProjectName.trim();
     const trimmedPassword = newProjectPassword.trim();
+    const trimmedManagerRole = newProjectManagerRole.trim();
     if (!trimmedName) {
       setImportError('Project name is required.');
       return;
     }
     if (importRows.length === 0) {
       setImportError('Please upload an Excel file with at least one row.');
+      return;
+    }
+    if (!trimmedManagerRole) {
+      setImportError('Manager role is required.');
       return;
     }
 
@@ -294,6 +301,7 @@ const normalizeTimeValue = (value, fallback, mode = 'time') => {
         name: trimmedName,
         rows: importRows,
         managerPassword: trimmedPassword || undefined,
+        managerRole: newProjectManagerRole.trim() || undefined,
       });
       await fetchProjects();
       setSelectedProjectId(createdProject.id);
@@ -453,6 +461,22 @@ const normalizeTimeValue = (value, fallback, mode = 'time') => {
                 )
               }}
             />
+            {importRows.length > 0 && (
+              <FormControl fullWidth>
+                <InputLabel id="manager-role-label">Manager Role (required)</InputLabel>
+                <Select
+                  labelId="manager-role-label"
+                  value={newProjectManagerRole}
+                  label="Manager Role (required)"
+                  onChange={(e) => setNewProjectManagerRole(e.target.value)}
+                  required
+                >
+                  {[...new Set(importRows.map(r => r.role))].map(role => (
+                    <MenuItem key={role} value={role}>{role}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
             {selectedFileName && (
               <Typography variant="body2">
                 Selected file: {selectedFileName}

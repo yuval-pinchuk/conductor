@@ -15,6 +15,11 @@ class Project(db.Model):
     name = db.Column(db.String(255), nullable=False, unique=True)
     version = db.Column(db.String(50), nullable=False, default='v1.0.0')
     manager_password_hash = db.Column(db.String(255), nullable=True)
+    manager_role = db.Column(db.String(100), nullable=True)
+    clock_total_seconds = db.Column(db.Integer, default=0)
+    clock_is_running = db.Column(db.Boolean, default=False)
+    clock_target_datetime = db.Column(db.DateTime, nullable=True)
+    clock_is_using_target_time = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -42,7 +47,12 @@ class Project(db.Model):
             'name': self.name,
             'version': self.version,
             'roles': [pr.role_name for pr in self.roles],
-            'is_locked': self.manager_password_hash is not None
+            'is_locked': self.manager_password_hash is not None,
+            'manager_role': self.manager_role,
+            'clock_total_seconds': self.clock_total_seconds or 0,
+            'clock_is_running': self.clock_is_running or False,
+            'clock_target_datetime': self.clock_target_datetime.isoformat() if self.clock_target_datetime else None,
+            'clock_is_using_target_time': self.clock_is_using_target_time or False
         }
 
 

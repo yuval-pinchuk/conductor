@@ -570,7 +570,7 @@ const EditableTable = ({
                     )}
                   </TableCell>
                   
-                  {/* Status (Pass/Fail) Column - V and X buttons */}
+                  {/* Status (Pass/Fail/N/A) Column - V, X, and N/A buttons */}
                   <TableCell style={{ textAlign: 'right' }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', direction: 'rtl' }}>
                       <IconButton
@@ -590,6 +590,19 @@ const EditableTable = ({
                         title="נכשל"
                       >
                         <CloseIcon />
+                      </IconButton>
+                      <IconButton
+                        onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'N/A')}
+                        size="small"
+                        disabled={!canChangeStatus}
+                        color={row.status === 'N/A' ? 'default' : 'default'}
+                        title="לא רלוונטי"
+                        sx={{
+                          border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
+                          borderRadius: '4px'
+                        }}
+                      >
+                        <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
                       </IconButton>
                     </div>
                   </TableCell>

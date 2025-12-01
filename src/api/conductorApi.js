@@ -10,6 +10,11 @@ export const api = {
       method: 'PUT',
       body: { version },
     }),
+  updateProjectClock: (projectId, clockState) =>
+    request(`/api/projects/${projectId}/clock`, {
+      method: 'PUT',
+      body: clockState,
+    }),
 
   // Phases
   getPhases: (projectId) => request(`/api/projects/${projectId}/phases`),
