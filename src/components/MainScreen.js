@@ -66,6 +66,14 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
   const [lastProcessedCommandTimestamp, setLastProcessedCommandTimestamp] = useState(null);
   
+  // Use ref to track current time for accurate synchronization
+  const totalSecondsRef = React.useRef(0);
+  
+  // Keep ref in sync with state
+  React.useEffect(() => {
+    totalSecondsRef.current = totalSeconds;
+  }, [totalSeconds]);
+  
   const processClockCommand = (command, commandDataJson) => {
     if (!command) return;
     
@@ -96,10 +104,20 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         break;
       case 'start':
         if (!isUsingTargetTime) {
+          // Set the exact time from the command, then start
+          if (commandData.totalSeconds !== undefined) {
+            setTotalSeconds(commandData.totalSeconds);
+            setIsCountDown(commandData.totalSeconds < 0);
+          }
           setIsRunning(true);
         }
         break;
       case 'stop':
+        // Set the exact time from the command when stopping
+        if (commandData.totalSeconds !== undefined) {
+          setTotalSeconds(commandData.totalSeconds);
+          setIsCountDown(commandData.totalSeconds < 0);
+        }
         setIsRunning(false);
         break;
       case 'set_target':
@@ -251,11 +269,24 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const handleToggleClock = async () => {
     if (!isManager || isUsingTargetTime) return;
     const newIsRunning = !isRunning;
-    setIsRunning(newIsRunning);
     
-    // Broadcast command to all clients
+    // Use ref to get the most current time value (avoids stale state)
+    const currentTime = totalSecondsRef.current;
+    
+    if (!newIsRunning) {
+      // When stopping, immediately set the time locally to prevent drift
+      setTotalSeconds(currentTime);
+      setIsCountDown(currentTime < 0);
+      setIsRunning(false);
+    } else {
+      setIsRunning(true);
+    }
+    
+    // Broadcast command to all clients with the exact time
     try {
-      await api.createClockCommand(project.id, newIsRunning ? 'start' : 'stop', {});
+      await api.createClockCommand(project.id, newIsRunning ? 'start' : 'stop', {
+        totalSeconds: currentTime
+      });
     } catch (error) {
       console.error('Failed to broadcast clock command', error);
     }
@@ -269,6 +300,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
         setTotalSeconds(diffSeconds);
         setIsCountDown(diffSeconds < 0);
+        totalSecondsRef.current = diffSeconds;
       }
       return;
     }
@@ -289,12 +321,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           newSeconds += 1; // Count forward
         }
         
+        // Update ref immediately for accurate synchronization
+        totalSecondsRef.current = newSeconds;
+        
         return newSeconds;
       });
     }
   }, (isUsingTargetTime && targetDateTime) || isRunning ? 1000 : null);
   
-  // Poll for clock commands every 500ms
+  // Poll for clock commands every 200ms for better synchronization
   useInterval(() => {
     if (!isLoadingData && !isSaving) {
       api.getClockCommand(project.id)
@@ -310,7 +345,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           // Silently fail - command polling is not critical
         });
     }
-  }, 500);
+  }, 200);
 
   const normalizePhases = useCallback((phases = []) => phases.map(phase => ({
     ...phase,
