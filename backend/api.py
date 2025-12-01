@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User
 from sqlalchemy import func
 from datetime import datetime
+import json
 
 api = Blueprint('api', __name__)
 
@@ -35,31 +36,44 @@ def update_project_version(project_id):
     return jsonify(project.to_dict()), 200
 
 
-@api.route('/api/projects/<int:project_id>/clock', methods=['PUT'])
-def update_project_clock(project_id):
-    """Update project clock state"""
+@api.route('/api/projects/<int:project_id>/clock-command', methods=['POST'])
+def create_clock_command(project_id):
+    """Create a clock command that will be applied by all clients"""
     project = Project.query.get_or_404(project_id)
     data = request.get_json()
     
-    if 'totalSeconds' in data:
-        project.clock_total_seconds = data.get('totalSeconds', 0)
-    if 'isRunning' in data:
-        project.clock_is_running = data.get('isRunning', False)
-    if 'targetDateTime' in data:
-        target_dt_str = data.get('targetDateTime')
-        if target_dt_str:
-            try:
-                project.clock_target_datetime = datetime.fromisoformat(target_dt_str.replace('Z', '+00:00'))
-            except:
-                project.clock_target_datetime = None
-        else:
-            project.clock_target_datetime = None
-    if 'isUsingTargetTime' in data:
-        project.clock_is_using_target_time = data.get('isUsingTargetTime', False)
+    command = data.get('command')  # 'set_time', 'start', 'stop', 'set_target', 'clear_target'
+    command_data = data.get('data', {})
     
+    import json
+    project.clock_command = command
+    project.clock_command_data = json.dumps(command_data) if command_data else None
+    project.clock_command_timestamp = datetime.utcnow()
     project.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify(project.to_dict()), 200
+
+
+@api.route('/api/projects/<int:project_id>/clock-command', methods=['GET'])
+def get_clock_command(project_id):
+    """Get the latest clock command (used by clients to sync)"""
+    project = Project.query.get_or_404(project_id)
+    return jsonify({
+        'command': project.clock_command,
+        'data': json.loads(project.clock_command_data) if project.clock_command_data else None,
+        'timestamp': project.clock_command_timestamp.isoformat() if project.clock_command_timestamp else None
+    }), 200
+
+
+@api.route('/api/projects/<int:project_id>/clock-command/clear', methods=['POST'])
+def clear_clock_command(project_id):
+    """Clear the clock command after it's been processed"""
+    project = Project.query.get_or_404(project_id)
+    project.clock_command = None
+    project.clock_command_data = None
+    project.clock_command_timestamp = None
+    db.session.commit()
+    return jsonify({'message': 'Command cleared'}), 200
 
 
 @api.route('/api/projects/import', methods=['POST'])

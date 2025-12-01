@@ -58,13 +58,70 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   
-  // Clock State Management - initialize from project if available
-  const [totalSeconds, setTotalSeconds] = useState(project.clock_total_seconds || 0);
-  const [isRunning, setIsRunning] = useState(project.clock_is_running || false);
-  const [isCountDown, setIsCountDown] = useState((project.clock_total_seconds || 0) < 0);
-  const [targetDateTime, setTargetDateTime] = useState(project.clock_target_datetime || '');
-  const [isUsingTargetTime, setIsUsingTargetTime] = useState(project.clock_is_using_target_time || false);
+  // Clock State Management - pure front-end state
+  const [totalSeconds, setTotalSeconds] = useState(0);
+  const [isRunning, setIsRunning] = useState(false);
+  const [isCountDown, setIsCountDown] = useState(false);
+  const [targetDateTime, setTargetDateTime] = useState('');
+  const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
+  const [lastProcessedCommandTimestamp, setLastProcessedCommandTimestamp] = useState(null);
   
+  const processClockCommand = (command, commandDataJson) => {
+    if (!command) return;
+    
+    let commandData = {};
+    if (commandDataJson) {
+      // commandDataJson can be either a string (from project response) or already parsed object (from API)
+      if (typeof commandDataJson === 'string') {
+        try {
+          commandData = JSON.parse(commandDataJson);
+        } catch (e) {
+          console.error('Failed to parse clock command data', e);
+          return;
+        }
+      } else {
+        commandData = commandDataJson;
+      }
+    }
+    
+    switch (command) {
+      case 'set_time':
+        if (commandData.totalSeconds !== undefined) {
+          setTotalSeconds(commandData.totalSeconds);
+          setIsCountDown(commandData.totalSeconds < 0);
+          setIsUsingTargetTime(false);
+          setTargetDateTime('');
+          setIsRunning(false);
+        }
+        break;
+      case 'start':
+        if (!isUsingTargetTime) {
+          setIsRunning(true);
+        }
+        break;
+      case 'stop':
+        setIsRunning(false);
+        break;
+      case 'set_target':
+        if (commandData.targetDateTime) {
+          setTargetDateTime(commandData.targetDateTime);
+          setIsUsingTargetTime(true);
+          if (commandData.totalSeconds !== undefined) {
+            setTotalSeconds(commandData.totalSeconds);
+            setIsCountDown(commandData.totalSeconds < 0);
+          }
+          setIsRunning(false);
+        }
+        break;
+      case 'clear_target':
+        setTargetDateTime('');
+        setIsUsingTargetTime(false);
+        break;
+      default:
+        console.warn('Unknown clock command:', command);
+    }
+  };
+
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
       ...phase,
@@ -141,17 +198,14 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setTotalSeconds(newTotalSeconds);
     setIsCountDown(sign === -1);
     
-    // Sync to server if manager
+    // Broadcast command to all clients if manager
     if (isManager) {
       try {
-        await api.updateProjectClock(project.id, {
-          totalSeconds: newTotalSeconds,
-          isRunning: false,
-          targetDateTime: null,
-          isUsingTargetTime: false
+        await api.createClockCommand(project.id, 'set_time', {
+          totalSeconds: newTotalSeconds
         });
       } catch (error) {
-        console.error('Failed to update clock on server', error);
+        console.error('Failed to broadcast clock command', error);
       }
     }
   };
@@ -167,17 +221,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setIsCountDown(diffSeconds < 0);
     setIsRunning(false);
     
-    // Sync to server if manager
+    // Broadcast command to all clients if manager
     if (isManager) {
       try {
-        await api.updateProjectClock(project.id, {
-          totalSeconds: diffSeconds,
-          isRunning: false,
+        await api.createClockCommand(project.id, 'set_target', {
           targetDateTime: isoString,
-          isUsingTargetTime: true
+          totalSeconds: diffSeconds
         });
       } catch (error) {
-        console.error('Failed to update clock on server', error);
+        console.error('Failed to broadcast clock command', error);
       }
     }
   };
@@ -186,15 +238,12 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setTargetDateTime('');
     setIsUsingTargetTime(false);
     
-    // Sync to server if manager
+    // Broadcast command to all clients if manager
     if (isManager) {
       try {
-        await api.updateProjectClock(project.id, {
-          targetDateTime: null,
-          isUsingTargetTime: false
-        });
+        await api.createClockCommand(project.id, 'clear_target', {});
       } catch (error) {
-        console.error('Failed to update clock on server', error);
+        console.error('Failed to broadcast clock command', error);
       }
     }
   };
@@ -204,17 +253,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     const newIsRunning = !isRunning;
     setIsRunning(newIsRunning);
     
-    // Sync to server
+    // Broadcast command to all clients
     try {
-      await api.updateProjectClock(project.id, {
-        isRunning: newIsRunning
-      });
+      await api.createClockCommand(project.id, newIsRunning ? 'start' : 'stop', {});
     } catch (error) {
-      console.error('Failed to update clock on server', error);
+      console.error('Failed to broadcast clock command', error);
     }
   };
 
-  // Clock Interval Hook
+  // Clock Interval Hook - runs entirely on front-end
   useInterval(() => {
     if (isUsingTargetTime && targetDateTime) {
       const targetMs = new Date(targetDateTime).getTime();
@@ -222,14 +269,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
         setTotalSeconds(diffSeconds);
         setIsCountDown(diffSeconds < 0);
-        
-        // Sync to server if manager and running
-        if (isManager && isRunning) {
-          api.updateProjectClock(project.id, {
-            totalSeconds: diffSeconds,
-            isUsingTargetTime: true
-          }).catch(err => console.error('Failed to sync clock', err));
-        }
       }
       return;
     }
@@ -250,17 +289,28 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           newSeconds += 1; // Count forward
         }
         
-        // Sync to server if manager
-        if (isManager) {
-          api.updateProjectClock(project.id, {
-            totalSeconds: newSeconds
-          }).catch(err => console.error('Failed to sync clock', err));
-        }
-        
         return newSeconds;
       });
     }
   }, (isUsingTargetTime && targetDateTime) || isRunning ? 1000 : null);
+  
+  // Poll for clock commands every 500ms
+  useInterval(() => {
+    if (!isLoadingData && !isSaving) {
+      api.getClockCommand(project.id)
+        .then(response => {
+          if (response.command && response.timestamp) {
+            if (response.timestamp !== lastProcessedCommandTimestamp) {
+              processClockCommand(response.command, response.data || null);
+              setLastProcessedCommandTimestamp(response.timestamp);
+            }
+          }
+        })
+        .catch(err => {
+          // Silently fail - command polling is not critical
+        });
+    }
+  }, 500);
 
   const normalizePhases = useCallback((phases = []) => phases.map(phase => ({
     ...phase,
@@ -297,19 +347,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         if (projectResponse.version !== currentVersion && projectResponse.version === originalVersion) {
           setCurrentVersion(projectResponse.version);
         }
-      }
-      
-      // Sync clock state from server (always, for all users)
-      if (projectResponse.clock_total_seconds !== undefined) {
-        setTotalSeconds(projectResponse.clock_total_seconds);
-        setIsCountDown(projectResponse.clock_total_seconds < 0);
-      }
-      if (projectResponse.clock_is_running !== undefined) {
-        setIsRunning(projectResponse.clock_is_running);
-      }
-      if (projectResponse.clock_target_datetime !== undefined) {
-        setTargetDateTime(projectResponse.clock_target_datetime || '');
-        setIsUsingTargetTime(projectResponse.clock_is_using_target_time || false);
       }
       
       const normalizedPhases = normalizePhases(phasesResponse);

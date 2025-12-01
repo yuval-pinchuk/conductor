@@ -10,10 +10,16 @@ export const api = {
       method: 'PUT',
       body: { version },
     }),
-  updateProjectClock: (projectId, clockState) =>
-    request(`/api/projects/${projectId}/clock`, {
-      method: 'PUT',
-      body: clockState,
+  createClockCommand: (projectId, command, data = {}) =>
+    request(`/api/projects/${projectId}/clock-command`, {
+      method: 'POST',
+      body: { command, data },
+    }),
+  getClockCommand: (projectId) =>
+    request(`/api/projects/${projectId}/clock-command`),
+  clearClockCommand: (projectId) =>
+    request(`/api/projects/${projectId}/clock-command/clear`, {
+      method: 'POST',
     }),
 
   // Phases

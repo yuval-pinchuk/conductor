@@ -15,10 +15,9 @@
   `version` VARCHAR(50) NOT NULL DEFAULT 'v1.0.0',
   `manager_password_hash` VARCHAR(255) NULL,
   `manager_role` VARCHAR(100) NULL,
-  `clock_total_seconds` INT DEFAULT 0,
-  `clock_is_running` TINYINT(1) DEFAULT 0,
-  `clock_target_datetime` DATETIME NULL,
-  `clock_is_using_target_time` TINYINT(1) DEFAULT 0,
+  `clock_command` VARCHAR(50) NULL,
+  `clock_command_data` TEXT NULL,
+  `clock_command_timestamp` DATETIME NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
  ) ENGINE=InnoDB;
