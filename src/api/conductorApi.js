@@ -106,5 +106,19 @@ export const api = {
       method: 'PUT',
       body: scriptsPayload,
     }),
+
+  // User/Login management
+  getActiveLogins: (projectId) =>
+    request(`/api/projects/${projectId}/active-logins`),
+  registerLogin: (projectId, name, role) =>
+    request(`/api/projects/${projectId}/login`, {
+      method: 'POST',
+      body: { name, role },
+    }),
+  registerLogout: (projectId, name, role) =>
+    request(`/api/projects/${projectId}/logout`, {
+      method: 'POST',
+      body: { name, role },
+    }),
 };
 

@@ -157,6 +157,7 @@ class User(db.Model):
     name = db.Column(db.String(255), nullable=False)
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False)
     role = db.Column(db.String(100), nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     last_login = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -165,6 +166,8 @@ class User(db.Model):
             'id': self.id,
             'name': self.name,
             'project_id': self.project_id,
-            'role': self.role
+            'role': self.role,
+            'is_active': self.is_active,
+            'last_login': self.last_login.isoformat() if self.last_login else None
         }
 

@@ -81,18 +81,22 @@
      ON DELETE CASCADE
  ) ENGINE=InnoDB;
  
- -- Users table
- CREATE TABLE `users` (
-   `id` INT AUTO_INCREMENT PRIMARY KEY,
-   `name` VARCHAR(255) NOT NULL,
-   `project_id` INT NOT NULL,
-   `role` VARCHAR(100) NOT NULL,
-   `last_login` DATETIME NULL,
-   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-   CONSTRAINT `fk_users_project`
-     FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
-     ON DELETE CASCADE
- ) ENGINE=InnoDB;
+-- Users table (tracks active logins)
+CREATE TABLE `users` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(255) NOT NULL,
+  `project_id` INT NOT NULL,
+  `role` VARCHAR(100) NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `last_login` DATETIME NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_users_project`
+    FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- Create unique index for active users only (allows multiple inactive users)
+-- Note: MySQL doesn't support partial unique indexes directly, so we'll enforce this in application logic
  
  -- Optional seed data (comment out if not needed)
  -- INSERT INTO `projects` (`name`, `version`) VALUES ('Project Alpha', 'v1.2.5');

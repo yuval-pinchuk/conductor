@@ -461,3 +461,89 @@ def update_periodic_scripts_bulk(project_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+
+# ==================== USER/LOGIN ENDPOINTS ====================
+
+@api.route('/api/projects/<int:project_id>/active-logins', methods=['GET'])
+def get_active_logins(project_id):
+    """Get all active logins for a project"""
+    active_users = User.query.filter_by(project_id=project_id, is_active=True).all()
+    return jsonify([user.to_dict() for user in active_users]), 200
+
+
+@api.route('/api/projects/<int:project_id>/login', methods=['POST'])
+def register_login(project_id):
+    """Register a user login - marks role as taken"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    name = (data.get('name') or '').strip()
+    role = (data.get('role') or '').strip()
+    
+    if not name or not role:
+        return jsonify({'error': 'Name and role are required'}), 400
+    
+    # Check if role is already taken
+    existing_active = User.query.filter_by(
+        project_id=project_id, 
+        role=role, 
+        is_active=True
+    ).first()
+    
+    if existing_active:
+        return jsonify({
+            'error': f'Role "{role}" is already in use by {existing_active.name}'
+        }), 409
+    
+    # Create or update user record
+    user = User.query.filter_by(
+        project_id=project_id,
+        role=role,
+        name=name
+    ).first()
+    
+    if user:
+        # Update existing user
+        user.is_active = True
+        user.last_login = datetime.utcnow()
+    else:
+        # Create new user
+        user = User(
+            project_id=project_id,
+            role=role,
+            name=name,
+            is_active=True,
+            last_login=datetime.utcnow()
+        )
+        db.session.add(user)
+    
+    db.session.commit()
+    return jsonify(user.to_dict()), 200
+
+
+@api.route('/api/projects/<int:project_id>/logout', methods=['POST'])
+def register_logout(project_id):
+    """Register a user logout - frees up the role"""
+    data = request.get_json()
+    
+    name = (data.get('name') or '').strip()
+    role = (data.get('role') or '').strip()
+    
+    if not name or not role:
+        return jsonify({'error': 'Name and role are required'}), 400
+    
+    # Find and deactivate the user
+    user = User.query.filter_by(
+        project_id=project_id,
+        role=role,
+        name=name,
+        is_active=True
+    ).first()
+    
+    if user:
+        user.is_active = False
+        db.session.commit()
+        return jsonify({'message': 'Logout successful'}), 200
+    else:
+        return jsonify({'error': 'Active login not found'}), 404
+

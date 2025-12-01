@@ -38,6 +38,7 @@ const LoginScreen = ({ onLogin }) => {
   const [projects, setProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [activeLogins, setActiveLogins] = useState([]); // Track which roles are currently in use
 
   // New project modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -100,6 +101,39 @@ const LoginScreen = ({ onLogin }) => {
     }
   }, [selectedProjectId, selectedProject]);
 
+  // Fetch active logins when project changes
+  useEffect(() => {
+    if (selectedProjectId) {
+      api.getActiveLogins(selectedProjectId)
+        .then(logins => {
+          setActiveLogins(logins);
+        })
+        .catch(err => {
+          console.error('Failed to fetch active logins', err);
+          setActiveLogins([]);
+        });
+    } else {
+      setActiveLogins([]);
+    }
+  }, [selectedProjectId]);
+
+  // Poll for active logins every 2 seconds
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    
+    const interval = setInterval(() => {
+      api.getActiveLogins(selectedProjectId)
+        .then(logins => {
+          setActiveLogins(logins);
+        })
+        .catch(err => {
+          // Silently fail - polling is not critical
+        });
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [selectedProjectId]);
+
   useEffect(() => {
     setLoginError('');
     if (selectedRole !== selectedProject?.manager_role) {
@@ -111,6 +145,14 @@ const LoginScreen = ({ onLogin }) => {
     if (!isLoginEnabled) return;
     setLoginError('');
 
+    // Check if role is already taken
+    const isRoleTaken = activeLogins.some(login => login.role === selectedRole);
+    if (isRoleTaken) {
+      const takenBy = activeLogins.find(login => login.role === selectedRole);
+      setLoginError(`Role "${selectedRole}" is already in use by ${takenBy.name}`);
+      return;
+    }
+
     if (requiresManagerPassword) {
       try {
         await api.verifyManagerPassword(selectedProjectId, managerPassword);
@@ -119,6 +161,15 @@ const LoginScreen = ({ onLogin }) => {
         setLoginError(error.message || 'Invalid manager password');
         return;
       }
+    }
+
+    // Register the login
+    try {
+      await api.registerLogin(selectedProjectId, userName.trim(), selectedRole);
+    } catch (error) {
+      console.error('Failed to register login', error);
+      setLoginError(error.message || 'Failed to register login. Role may be taken.');
+      return;
     }
 
     onLogin({
@@ -322,7 +373,7 @@ const normalizeTimeValue = (value, fallback, mode = 'time') => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 50 }}>
-      <h2>Experiment Manager Login</h2>
+      <h2>CONDUCTOR</h2>
       {isLoadingProjects && <CircularProgress size={28} />}
       {loadError && (
         <Typography color="error" sx={{ mt: 1 }}>
@@ -368,9 +419,22 @@ const normalizeTimeValue = (value, fallback, mode = 'time') => {
           label="Role"
           onChange={(e) => setSelectedRole(e.target.value)}
         >
-          {availableRoles.map(role => (
-            <MenuItem key={role} value={role}>{role}</MenuItem>
-          ))}
+          {availableRoles.map(role => {
+            const isRoleTaken = activeLogins.some(login => login.role === role);
+            const takenBy = activeLogins.find(login => login.role === role);
+            return (
+              <MenuItem 
+                key={role} 
+                value={role}
+                disabled={isRoleTaken}
+                sx={{
+                  opacity: isRoleTaken ? 0.5 : 1,
+                }}
+              >
+                {role}{isRoleTaken ? ` (in use by ${takenBy?.name})` : ''}
+              </MenuItem>
+            );
+          })}
         </Select>
       </FormControl>
 
