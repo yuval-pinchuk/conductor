@@ -42,7 +42,7 @@ const TimeInput = ({ value, onChange, format }) => {
   };
 
 return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, direction: 'rtl' }}>
       {/* +/- Toggle only for hh:mm:ss column (Time) */}
       {format !== 'mm:ss' && (
         <Button 
@@ -61,12 +61,13 @@ return (
         size="small"
         placeholder={format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}
         error={!isFormatValid} 
-        helperText={!isFormatValid && `Format must be strictly ${format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}`} // Updated helper text
+        helperText={!isFormatValid && `הפורמט חייב להיות בדיוק ${format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}`} // Updated helper text
         style={{ width: format === 'mm:ss' ? 95 : 140 }}
         inputProps={{ 
             // Maximum length based on format (5 for mm:ss, 8 for hh:mm:ss)
             maxLength: format === 'mm:ss' ? 5 : 8, 
             pattern: currentRegex.source, // Browser validation hint
+            style: { textAlign: 'right' }
         }}
       />
     </div>
@@ -191,10 +192,10 @@ const EditableTable = ({
   };
 
   return (
-      <TableContainer component={Paper} style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0' }}>
+      <TableContainer component={Paper} style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0', direction: 'rtl' }}>
       
         {/* Periodic Scripts Row */}
-        <div style={{ padding: '15px', borderBottom: '2px solid #444', backgroundColor: '#1e1e1e' }}>
+        <div style={{ padding: '15px', borderBottom: '2px solid #444', backgroundColor: '#1e1e1e', direction: 'rtl' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 15, flexWrap: 'wrap' }}>
             {periodicScripts.map((script) => (
               <div
@@ -213,9 +214,10 @@ const EditableTable = ({
                       value={script.name}
                       onChange={(e) => handleUpdatePeriodicScript(script.id, 'name', e.target.value)}
                       size="small"
-                      placeholder="Script Name"
+                      placeholder="שם סקריפט"
                       style={{ width: 120 }}
                       sx={{
+                        direction: 'rtl',
                         '& .MuiOutlinedInput-root': {
                           backgroundColor: '#2d2d2d',
                           color: 'white',
@@ -228,6 +230,9 @@ const EditableTable = ({
                           '&.Mui-focused fieldset': {
                             borderColor: '#999',
                           },
+                        },
+                        '& .MuiInputBase-input': {
+                          textAlign: 'right',
                         },
                         '& .MuiInputBase-input::placeholder': {
                           color: '#aaa',
@@ -239,9 +244,10 @@ const EditableTable = ({
                       value={script.path}
                       onChange={(e) => handleUpdatePeriodicScript(script.id, 'path', e.target.value)}
                       size="small"
-                      placeholder="Script Path"
+                      placeholder="נתיב סקריפט"
                       style={{ width: 200 }}
                       sx={{
+                        direction: 'rtl',
                         '& .MuiOutlinedInput-root': {
                           backgroundColor: '#2d2d2d',
                           color: 'white',
@@ -254,6 +260,9 @@ const EditableTable = ({
                           '&.Mui-focused fieldset': {
                             borderColor: '#999',
                           },
+                        },
+                        '& .MuiInputBase-input': {
+                          textAlign: 'right',
                         },
                         '& .MuiInputBase-input::placeholder': {
                           color: '#aaa',
@@ -286,7 +295,7 @@ const EditableTable = ({
                         onClick={() => handleRemovePeriodicScript(script.id)}
                         size="small"
                         color="error"
-                        title="Remove Script"
+                        title="הסר סקריפט"
                       >
                         <DeleteIcon />
                       </IconButton>
@@ -322,8 +331,8 @@ const EditableTable = ({
                 onClick={handleAddPeriodicScript}
                 size="small"
                 color="primary"
-                title="Add Periodic Script"
-                style={{ marginLeft: 10 }}
+                title="הוסף סקריפט תקופתי"
+                style={{ marginRight: 10 }}
               >
                 <AddIcon />
               </IconButton>
@@ -333,17 +342,17 @@ const EditableTable = ({
       
         {/* Manager Controls Area */}
         {isEditing && (
-          <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc' }}>
+          <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc', direction: 'rtl' }}>
           
             {/* Add New Role controls (existing) */}
-            <Button variant="contained" onClick={handleAddNewRole}>
-              Add New Role
+            <Button variant="contained" onClick={handleAddNewRole} style={{ direction: 'rtl' }}>
+              הוסף תפקיד חדש
             </Button>
             {/* ... New Role TextField ... */}
           
             {/* Add New Phase Button (NEW) */}
-            <Button variant="contained" color="secondary" onClick={handleAddPhase}>
-              Add New Phase
+            <Button variant="contained" color="secondary" onClick={handleAddPhase} style={{ direction: 'rtl' }}>
+              הוסף שלב חדש
             </Button>
 
           </div>
@@ -352,14 +361,14 @@ const EditableTable = ({
       <Table stickyHeader size="small">
         <TableHead>
           <TableRow>
-            <TableCell style={{ width: '5%' }}>#</TableCell>
-            <TableCell style={{ width: '10%' }}>Role</TableCell>
-            <TableCell style={{ width: '15%' }}>Time (hh:mm:ss)</TableCell>
-            <TableCell style={{ width: '10%' }}>Duration (mm:ss)</TableCell>
-            <TableCell style={{ width: '35%' }}>Description</TableCell>
-            <TableCell style={{ width: '15%' }}>Script</TableCell>
-            <TableCell style={{ width: '10%' }}>Status</TableCell>
-            {isEditing && <TableCell style={{ width: '5%' }}>Actions</TableCell>}
+            <TableCell style={{ width: '5%', textAlign: 'center' }}>#</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right' }}>תפקיד</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right' }}>זמן</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right' }}>משך</TableCell>
+            <TableCell style={{ width: '35%', textAlign: 'right' }}>תיאור</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right' }}>סקריפט</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right' }}>סטטוס</TableCell>
+            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center' }}>פעולות</TableCell>}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -373,31 +382,32 @@ const EditableTable = ({
                 <TableRow style={{ backgroundColor: '#1e1e1e' }}>
                   <TableCell colSpan={isEditing ? 8 : 7} style={{ 
                       fontWeight: 'bold', 
-                      backgroundColor: '#1e1e1e' 
+                      backgroundColor: '#1e1e1e',
+                      textAlign: 'right'
                   }}>
-                    Phase {phase.phase}
+                    שלב {phase.phase}
                     {/* Phase Activation Toggle */}
                     {isManager && (
                         <IconButton 
                             onClick={() => handleTogglePhaseActivation(phase)} 
                             size="small" 
                             color={isPhaseActive ? 'success' : 'secondary'}
-                            title={isPhaseActive ? "Deactivate Phase" : "Activate Phase"}
+                            title={isPhaseActive ? "פעל שלב" : "השבת שלב"}
                         >
                             {isPhaseActive ? <ToggleOnIcon /> : <ToggleOffIcon />}
                         </IconButton>
                     )}
-                    {isPhaseActive && <span style={{ marginLeft: 8, color: 'lightgreen' }}>(ACTIVE)</span>}
+                    {isPhaseActive && <span style={{ marginRight: 8, color: 'lightgreen' }}>(פעיל)</span>}
 
                     {isEditing && (
                       <>
                         {/* Button to ADD Row */}
-                        <IconButton onClick={() => handleAddRow(phaseIndex)} size="small" color="primary" title="Add Row">
+                        <IconButton onClick={() => handleAddRow(phaseIndex)} size="small" color="primary" title="הוסף שורה">
                           <AddIcon />
                         </IconButton>
                         
                         {/* Button to DELETE Phase */} 
-                        <IconButton onClick={() => handleRemovePhase(phaseIndex)} size="small" color="secondary" title="Delete Phase">
+                        <IconButton onClick={() => handleRemovePhase(phaseIndex)} size="small" color="secondary" title="מחק שלב">
                           <DeleteIcon />
                         </IconButton>
                       </>
@@ -466,13 +476,13 @@ const EditableTable = ({
                     {rowIndex + 1}
                   </TableCell>
                   {/* Role */}
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right' }}>
                     {isEditing ? (
                       <Select
                         value={row.role}
                         onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
                         size="small"
-                        style={{ width: '100%' }}
+                        style={{ width: '100%', direction: 'rtl' }}
                       >
                         {allRoles.map(role => <MenuItem key={role} value={role}>{role}</MenuItem>)}
                       </Select>
@@ -481,7 +491,7 @@ const EditableTable = ({
                     )}
                   </TableCell>
                   
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right' }}>
                     {isEditing ? (
                         <TimeInput 
                         value={row.time}
@@ -493,7 +503,7 @@ const EditableTable = ({
                     )}
                   </TableCell>
 
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right' }}>
                     {isEditing ? (
                         <TimeInput 
                         value={row.duration}
@@ -506,7 +516,7 @@ const EditableTable = ({
                   </TableCell>
 
                   {/* Description (Free Text, Expands Row) */}
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right' }}>
                     {isEditing ? (
                       <TextField
                         value={row.description}
@@ -514,35 +524,37 @@ const EditableTable = ({
                         size="small"
                         multiline
                         fullWidth
+                        sx={{ direction: 'rtl', '& textarea': { textAlign: 'right' } }}
                       />
                     ) : (
-                      <Typography style={{ whiteSpace: 'pre-wrap' }}>
+                      <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right' }}>
                         {row.description}
                       </Typography>
                     )}
                   </TableCell>
                   
                   {/* Script Column */}
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right' }}>
                     {isEditing ? (
                       <TextField
                         value={row.script || ''}
                         onChange={(e) => handleChange(phaseIndex, rowIndex, 'script', e.target.value)}
                         size="small"
-                        placeholder="Path/API Endpoint"
+                        placeholder="נתיב/נקודת קצה API"
                         fullWidth
+                        sx={{ direction: 'rtl', '& input': { textAlign: 'right' } }}
                       />
                     ) : (
                       row.script ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', direction: 'rtl' }}>
                           <Button 
                             variant="contained" 
                             size="small"
                             color="primary"
-                            startIcon={<PlayArrowIcon />}
+                            endIcon={<PlayArrowIcon />}
                             onClick={() => handleRunScript(phaseIndex, rowIndex)}
                           >
-                            Run Script
+                            הרץ סקריפט
                           </Button>
                           {row.scriptResult !== undefined && (
                             row.scriptResult ? (
@@ -559,14 +571,14 @@ const EditableTable = ({
                   </TableCell>
                   
                   {/* Status (Pass/Fail) Column - V and X buttons */}
-                  <TableCell>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <TableCell style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', direction: 'rtl' }}>
                       <IconButton
                         onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
                         size="small"
                         disabled={!canChangeStatus}
                         color={row.status === 'Passed' ? 'success' : 'default'}
-                        title="Passed"
+                        title="עבר"
                       >
                         <CheckIcon />
                       </IconButton>
@@ -575,7 +587,7 @@ const EditableTable = ({
                         size="small"
                         disabled={!canChangeStatus}
                         color={row.status === 'Failed' ? 'error' : 'default'}
-                        title="Failed"
+                        title="נכשל"
                       >
                         <CloseIcon />
                       </IconButton>
@@ -584,7 +596,7 @@ const EditableTable = ({
                   
                   {/* Actions (Remove) */}
                   {isEditing && (
-                    <TableCell>
+                    <TableCell style={{ textAlign: 'center' }}>
                       <IconButton onClick={() => handleRemoveRow(phaseIndex, rowIndex)} size="small" color="error">
                         <DeleteIcon />
                       </IconButton>
