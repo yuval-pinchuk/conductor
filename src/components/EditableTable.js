@@ -663,13 +663,47 @@ const EditableTable = ({
         {isEditing && (
           <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc', direction: 'rtl', flexWrap: 'wrap' }}>
           
-            {/* Add New Role controls (existing) */}
+            {/* Add New Role controls */}
+            <TextField
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value)}
+              placeholder="שם תפקיד חדש"
+              size="small"
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  handleAddNewRole();
+                }
+              }}
+              sx={{
+                direction: 'rtl',
+                '& .MuiOutlinedInput-root': {
+                  backgroundColor: '#2d2d2d',
+                  color: 'white',
+                  '& fieldset': {
+                    borderColor: '#555',
+                  },
+                  '&:hover fieldset': {
+                    borderColor: '#777',
+                  },
+                  '&.Mui-focused fieldset': {
+                    borderColor: '#999',
+                  },
+                },
+                '& .MuiInputBase-input': {
+                  textAlign: 'right',
+                  fontSize: '1rem'
+                },
+                '& .MuiInputBase-input::placeholder': {
+                  color: '#aaa',
+                  opacity: 1,
+                },
+              }}
+            />
             <Button variant="contained" onClick={handleAddNewRole} style={{ direction: 'rtl' }}>
               הוסף תפקיד חדש
             </Button>
-            {/* ... New Role TextField ... */}
           
-            {/* Add New Phase Button (NEW) */}
+            {/* Add New Phase Button */}
             <Button variant="contained" color="secondary" onClick={handleAddPhase} style={{ direction: 'rtl' }}>
               הוסף שלב חדש
             </Button>

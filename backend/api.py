@@ -1,7 +1,7 @@
 # backend/api.py
 
 from flask import Blueprint, request, jsonify
-from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User
+from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange
 from sqlalchemy import func
 from datetime import datetime
 import json
@@ -642,4 +642,357 @@ def clear_user_notification(project_id):
         return jsonify({'message': 'Notification cleared'}), 200
     else:
         return jsonify({'error': 'Active user not found'}), 404
+
+
+# ==================== PENDING CHANGES ENDPOINTS ====================
+
+@api.route('/api/projects/<int:project_id>/pending-changes', methods=['POST'])
+def create_pending_change(project_id):
+    """Create a pending change request from a non-manager user"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    submitted_by = data.get('submitted_by', '').strip()
+    submitted_by_role = data.get('submitted_by_role', '').strip()
+    change_type = data.get('change_type', 'all')  # 'table_data', 'version', 'periodic_scripts', 'all'
+    changes_data = data.get('changes_data', {})
+    
+    if not submitted_by or not submitted_by_role:
+        return jsonify({'error': 'submitted_by and submitted_by_role are required'}), 400
+    
+    # Create pending change
+    pending_change = PendingChange(
+        project_id=project_id,
+        submitted_by=submitted_by,
+        submitted_by_role=submitted_by_role,
+        change_type=change_type,
+        changes_data=json.dumps(changes_data),
+        status='pending'
+    )
+    
+    db.session.add(pending_change)
+    db.session.commit()
+    
+    # Notify manager if they're logged in
+    manager_role = project.manager_role
+    if manager_role:
+        manager_user = User.query.filter_by(
+            project_id=project_id,
+            role=manager_role,
+            is_active=True
+        ).first()
+        
+        if manager_user:
+            manager_user.notification_command = 'pending_changes'
+            manager_user.notification_data = json.dumps({
+                'pending_change_id': pending_change.id,
+                'submitted_by': submitted_by,
+                'submitted_by_role': submitted_by_role
+            })
+            manager_user.notification_timestamp = datetime.utcnow()
+            db.session.commit()
+    
+    return jsonify(pending_change.to_dict()), 201
+
+
+@api.route('/api/projects/<int:project_id>/pending-changes', methods=['GET'])
+def get_pending_changes(project_id):
+    """Get all pending changes for a project"""
+    project = Project.query.get_or_404(project_id)
+    
+    status_filter = request.args.get('status', 'pending')  # 'pending', 'all', 'accepted', 'declined'
+    
+    query = PendingChange.query.filter_by(project_id=project_id)
+    if status_filter != 'all':
+        query = query.filter_by(status=status_filter)
+    
+    pending_changes = query.order_by(PendingChange.created_at.desc()).all()
+    return jsonify([pc.to_dict() for pc in pending_changes]), 200
+
+
+@api.route('/api/projects/<int:project_id>/pending-changes/<int:change_id>/accept-row', methods=['POST'])
+def accept_pending_change_row(project_id, change_id):
+    """Accept a single row change from a pending change"""
+    project = Project.query.get_or_404(project_id)
+    pending_change = PendingChange.query.filter_by(
+        project_id=project_id,
+        id=change_id,
+        status='pending'
+    ).first_or_404()
+    
+    data = request.get_json()
+    row_id = data.get('row_id')
+    row_action = data.get('action')  # 'update', 'create', 'delete'
+    row_data = data.get('row_data')
+    
+    if not row_id and row_action != 'create':
+        return jsonify({'error': 'row_id is required for update/delete'}), 400
+    
+    try:
+        changes_data = json.loads(pending_change.changes_data)
+        
+        if row_action == 'update' and row_data:
+            # Update the row directly
+            row = Row.query.get(row_id)
+            if row:
+                row.role = row_data.get('role', row.role)
+                row.time = row_data.get('time', row.time)
+                row.duration = row_data.get('duration', row.duration)
+                row.description = row_data.get('description', row.description)
+                row.script = row_data.get('script', row.script)
+                row.status = row_data.get('status', row.status)
+                row.updated_at = datetime.utcnow()
+                db.session.commit()
+                
+                # Remove this row from pending changes
+                if 'table_data' in changes_data:
+                    for phase in changes_data['table_data']:
+                        if 'rows' in phase:
+                            phase['rows'] = [r for r in phase['rows'] if r.get('id') != row_id]
+                    pending_change.changes_data = json.dumps(changes_data)
+                    db.session.commit()
+                
+                return jsonify({'message': 'Row change accepted'}), 200
+                
+        elif row_action == 'create' and row_data:
+            # Create the row
+            phase_id = data.get('phase_id')
+            if not phase_id:
+                return jsonify({'error': 'phase_id is required for create'}), 400
+                
+            row = Row(
+                phase_id=phase_id,
+                role=row_data.get('role', ''),
+                time=row_data.get('time', '00:00:00'),
+                duration=row_data.get('duration', '00:00'),
+                description=row_data.get('description', ''),
+                script=row_data.get('script', ''),
+                status=row_data.get('status', 'N/A'),
+                script_result=row_data.get('scriptResult')
+            )
+            db.session.add(row)
+            db.session.commit()
+            
+            # Remove this row from pending changes (find by matching properties since it has no ID yet)
+            if 'table_data' in changes_data:
+                for phase in changes_data['table_data']:
+                    if 'rows' in phase:
+                        phase['rows'] = [
+                            r for r in phase['rows'] 
+                            if not (
+                                r.get('role') == row_data.get('role') and 
+                                r.get('time') == row_data.get('time') and 
+                                r.get('description') == row_data.get('description') and
+                                not r.get('id')  # New rows don't have IDs
+                            )
+                        ]
+                pending_change.changes_data = json.dumps(changes_data)
+                db.session.commit()
+            
+            return jsonify({'message': 'Row created'}), 200
+            
+        elif row_action == 'delete':
+            # Delete the row
+            row = Row.query.get(row_id)
+            if row:
+                db.session.delete(row)
+                db.session.commit()
+                
+                # Remove this row from pending changes
+                if 'table_data' in changes_data:
+                    for phase in changes_data['table_data']:
+                        if 'rows' in phase:
+                            phase['rows'] = [r for r in phase['rows'] if r.get('id') != row_id]
+                    pending_change.changes_data = json.dumps(changes_data)
+                    db.session.commit()
+                
+                return jsonify({'message': 'Row deleted'}), 200
+        
+        return jsonify({'error': 'Invalid action or missing data'}), 400
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/projects/<int:project_id>/pending-changes/<int:change_id>/accept', methods=['POST'])
+def accept_pending_change(project_id, change_id):
+    """Accept a pending change and apply it"""
+    project = Project.query.get_or_404(project_id)
+    pending_change = PendingChange.query.filter_by(
+        project_id=project_id,
+        id=change_id,
+        status='pending'
+    ).first_or_404()
+    
+    data = request.get_json()
+    reviewed_by = data.get('reviewed_by', '').strip()
+    
+    if not reviewed_by:
+        return jsonify({'error': 'reviewed_by is required'}), 400
+    
+    changes_data = json.loads(pending_change.changes_data)
+    change_type = pending_change.change_type
+    
+    try:
+        # Apply the changes based on type
+        if change_type in ('all', 'version') and 'version' in changes_data:
+            project.version = changes_data['version']
+        
+        if change_type in ('all', 'table_data') and 'table_data' in changes_data:
+            # Apply table data changes (phases and rows) - reuse logic from update_table_data
+            table_data = changes_data['table_data']
+            
+            # Get existing phases
+            existing_phases = {p.phase_number: p for p in Phase.query.filter_by(project_id=project_id).all()}
+            existing_phase_numbers = set(existing_phases.keys())
+            new_phase_numbers = {phase.get('phase') for phase in table_data if phase.get('phase')}
+            
+            # Delete phases that are not in the new data
+            phases_to_delete = existing_phase_numbers - new_phase_numbers
+            for phase_num in phases_to_delete:
+                phase = existing_phases.get(phase_num)
+                if phase:
+                    db.session.delete(phase)
+            
+            # Update or create phases and rows
+            for phase_data in table_data:
+                phase_number = phase_data.get('phase')
+                if not phase_number:
+                    continue
+                
+                phase = existing_phases.get(phase_number)
+                if not phase:
+                    phase = Phase(project_id=project_id, phase_number=phase_number, is_active=False)
+                    db.session.add(phase)
+                    db.session.flush()  # Get the phase ID
+                
+                # Update rows
+                existing_rows = {r.id: r for r in Row.query.filter_by(phase_id=phase.id).all()}
+                existing_row_ids = set(existing_rows.keys())
+                new_row_ids = {row.get('id') for row in phase_data.get('rows', []) if row.get('id')}
+                
+                # Delete rows that are not in the new data
+                rows_to_delete = existing_row_ids - new_row_ids
+                for row_id in rows_to_delete:
+                    row = existing_rows.get(row_id)
+                    if row:
+                        db.session.delete(row)
+                
+                # Update or create rows
+                for row_data in phase_data.get('rows', []):
+                    row_id = row_data.get('id')
+                    if row_id and row_id in existing_rows:
+                        # Update existing row
+                        row = existing_rows[row_id]
+                        row.role = row_data.get('role', row.role)
+                        row.time = row_data.get('time', row.time)
+                        row.duration = row_data.get('duration', row.duration)
+                        row.description = row_data.get('description', row.description)
+                        row.script = row_data.get('script', row.script)
+                        row.status = row_data.get('status', row.status)
+                        row.script_result = row_data.get('scriptResult', row.script_result)
+                        row.updated_at = datetime.utcnow()
+                    else:
+                        # Create new row
+                        row = Row(
+                            phase_id=phase.id,
+                            role=row_data.get('role', ''),
+                            time=row_data.get('time', '00:00:00'),
+                            duration=row_data.get('duration', '00:00'),
+                            description=row_data.get('description', ''),
+                            script=row_data.get('script', ''),
+                            status=row_data.get('status', 'N/A'),
+                            script_result=row_data.get('scriptResult')
+                        )
+                        db.session.add(row)
+        
+        if change_type in ('all', 'periodic_scripts') and 'periodic_scripts' in changes_data:
+            # Apply periodic scripts changes - reuse logic from update_periodic_scripts_bulk
+            scripts_data = changes_data['periodic_scripts']
+            
+            # Get existing scripts
+            existing_scripts = {s.id: s for s in PeriodicScript.query.filter_by(project_id=project_id).all()}
+            existing_script_ids = set(existing_scripts.keys())
+            new_script_ids = {script.get('id') for script in scripts_data if script.get('id')}
+            
+            # Delete scripts that are not in the new data
+            scripts_to_delete = existing_script_ids - new_script_ids
+            for script_id in scripts_to_delete:
+                script = existing_scripts.get(script_id)
+                if script:
+                    db.session.delete(script)
+            
+            # Update or create scripts
+            for script_data in scripts_data:
+                script_id = script_data.get('id')
+                if script_id and script_id in existing_scripts:
+                    # Update existing script
+                    script = existing_scripts[script_id]
+                    script.name = script_data.get('name', script.name)
+                    script.path = script_data.get('path', script.path)
+                    script.status = script_data.get('status', script.status)
+                    script.updated_at = datetime.utcnow()
+                else:
+                    # Create new script
+                    script = PeriodicScript(
+                        project_id=project_id,
+                        name=script_data.get('name', ''),
+                        path=script_data.get('path', ''),
+                        status=script_data.get('status', False)
+                    )
+                    db.session.add(script)
+        
+        # Save roles if provided
+        if change_type in ('all', 'roles') and 'roles' in changes_data:
+            new_roles = changes_data['roles']
+            if isinstance(new_roles, list):
+                # Get existing roles
+                existing_roles = {r.role_name for r in ProjectRole.query.filter_by(project_id=project_id).all()}
+                
+                # Add new roles that don't exist
+                for role_name in new_roles:
+                    if role_name and role_name not in existing_roles:
+                        project_role = ProjectRole(project_id=project_id, role_name=role_name)
+                        db.session.add(project_role)
+        
+        # Mark as accepted
+        pending_change.status = 'accepted'
+        pending_change.reviewed_by = reviewed_by
+        pending_change.reviewed_at = datetime.utcnow()
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Pending change accepted',
+            'pending_change': pending_change.to_dict(),
+            'changes_data': changes_data
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to apply changes: {str(e)}'}), 500
+
+
+@api.route('/api/projects/<int:project_id>/pending-changes/<int:change_id>/decline', methods=['POST'])
+def decline_pending_change(project_id, change_id):
+    """Decline a pending change"""
+    project = Project.query.get_or_404(project_id)
+    pending_change = PendingChange.query.filter_by(
+        project_id=project_id,
+        id=change_id,
+        status='pending'
+    ).first_or_404()
+    
+    data = request.get_json()
+    reviewed_by = data.get('reviewed_by', '').strip()
+    
+    if not reviewed_by:
+        return jsonify({'error': 'reviewed_by is required'}), 400
+    
+    pending_change.status = 'declined'
+    pending_change.reviewed_by = reviewed_by
+    pending_change.reviewed_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify(pending_change.to_dict()), 200
 

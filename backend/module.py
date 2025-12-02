@@ -177,3 +177,33 @@ class User(db.Model):
             'last_login': self.last_login.isoformat() if self.last_login else None
         }
 
+
+class PendingChange(db.Model):
+    """Pending changes table - stores edit requests from non-managers"""
+    __tablename__ = 'pending_changes'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False)
+    submitted_by = db.Column(db.String(255), nullable=False)
+    submitted_by_role = db.Column(db.String(100), nullable=False)
+    change_type = db.Column(db.String(50), nullable=False)  # 'table_data', 'version', 'periodic_scripts', 'all'
+    changes_data = db.Column(db.Text, nullable=False)  # JSON string
+    status = db.Column(db.String(20), nullable=False, default='pending')  # 'pending', 'accepted', 'declined'
+    reviewed_by = db.Column(db.String(255), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'submitted_by': self.submitted_by,
+            'submitted_by_role': self.submitted_by_role,
+            'change_type': self.change_type,
+            'changes_data': self.changes_data,
+            'status': self.status,
+            'reviewed_by': self.reviewed_by,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+

@@ -3,7 +3,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
-import { Button, Typography, CircularProgress } from '@mui/material';
+import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, Accordion, AccordionSummary, AccordionDetails, Divider, Chip } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import AddCircleIcon from '@mui/icons-material/AddCircle';
+import RemoveCircleIcon from '@mui/icons-material/RemoveCircle';
+import EditIcon from '@mui/icons-material/Edit';
 import { api } from '../api/conductorApi';
 
 const useInterval = (callback, delay) => {
@@ -54,6 +58,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   
   // Active Logins State
   const [activeLogins, setActiveLogins] = useState([]);
+  
+  // Pending Changes State
+  const [pendingChanges, setPendingChanges] = useState([]);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [selectedPendingChange, setSelectedPendingChange] = useState(null);
 
   // Loading states
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -501,7 +510,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   }, 2000);
 
   const handleToggleEdit = () => {
-    if (!isEditing && isManager) {
+    if (!isEditing) {
+      // Allow both managers and non-managers to edit
       // Create a DEEP CLONE of the table data to prevent mutation
       const clonedData = JSON.parse(JSON.stringify(currentTableData)); 
       const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
@@ -519,26 +529,53 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setIsSaving(true);
     setDataError('');
     try {
-      await Promise.all([
-        api.updateProjectVersion(project.id, currentVersion),
-        api.updateTableData(project.id, currentTableData),
-        api.updatePeriodicScriptsBulk(project.id, periodicScripts),
-      ]);
-      const clonedData = JSON.parse(JSON.stringify(currentTableData));
-      const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
-      setOriginalTableData(clonedData);
-      setOriginalPeriodicScripts(clonedScripts);
-      setOriginalVersion(currentVersion);
-      setProjectDetails(prev => ({
-        ...prev,
-        version: currentVersion,
-        roles: allRoles,
-      }));
-      setIsEditing(false);
-      console.log("Changes Saved. New Version:", currentVersion);
+      if (isManager) {
+        // Manager saves directly
+        await Promise.all([
+          api.updateProjectVersion(project.id, currentVersion),
+          api.updateTableData(project.id, currentTableData),
+          api.updatePeriodicScriptsBulk(project.id, periodicScripts),
+        ]);
+        const clonedData = JSON.parse(JSON.stringify(currentTableData));
+        const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
+        setOriginalTableData(clonedData);
+        setOriginalPeriodicScripts(clonedScripts);
+        setOriginalVersion(currentVersion);
+        setProjectDetails(prev => ({
+          ...prev,
+          version: currentVersion,
+          roles: allRoles,
+        }));
+        setIsEditing(false);
+        console.log("Changes Saved. New Version:", currentVersion);
+      } else {
+        // Non-manager submits pending change
+        const changesData = {
+          version: currentVersion,
+          table_data: currentTableData,
+          periodic_scripts: periodicScripts,
+          roles: allRoles, // Include roles in the change request
+        };
+        
+        await api.createPendingChange(
+          project.id,
+          name,
+          role,
+          'all',
+          changesData
+        );
+        
+        // Revert to original data after submission
+        setCurrentTableData(originalTableData);
+        setPeriodicScripts(originalPeriodicScripts);
+        setCurrentVersion(originalVersion);
+        setIsEditing(false);
+        alert('שינויים נשלחו לאישור המנהל');
+        console.log("Changes submitted for approval");
+      }
     } catch (error) {
-      console.error('Failed to save changes', error);
-      setDataError(error.message || 'Failed to save changes');
+      console.error('Failed to save/submit changes', error);
+      setDataError(error.message || 'Failed to save/submit changes');
     } finally {
       setIsSaving(false);
     }
@@ -570,6 +607,88 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setIsEditing(false);
     console.log("Changes Canceled. Reverted to original data and version.");
   };
+
+  // Fetch pending changes (for managers)
+  const fetchPendingChanges = useCallback(async () => {
+    if (!isManager) return;
+    try {
+      const changes = await api.getPendingChanges(project.id, 'pending');
+      setPendingChanges(changes);
+    } catch (error) {
+      console.error('Failed to fetch pending changes', error);
+    }
+  }, [isManager, project.id]);
+
+  // Handle accepting a pending change
+  const handleAcceptPendingChange = async (changeId) => {
+    try {
+      await api.acceptPendingChange(project.id, changeId, name);
+      
+      // Refresh data from server (changes are already applied on backend)
+      await loadProjectData(false);
+      const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+      setPendingChanges(updatedChanges);
+      
+      // Only close modal if no more pending changes
+      if (updatedChanges.length === 0) {
+        setReviewModalOpen(false);
+        setSelectedPendingChange(null);
+      }
+    } catch (error) {
+      console.error('Failed to accept pending change', error);
+      setDataError(error.message || 'Failed to accept pending change');
+    }
+  };
+
+  // Handle declining a pending change
+  const handleDeclinePendingChange = async (changeId) => {
+    try {
+      await api.declinePendingChange(project.id, changeId, name);
+      const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+      setPendingChanges(updatedChanges);
+      
+      // Only close modal if no more pending changes
+      if (updatedChanges.length === 0) {
+        setReviewModalOpen(false);
+        setSelectedPendingChange(null);
+      }
+    } catch (error) {
+      console.error('Failed to decline pending change', error);
+      setDataError(error.message || 'Failed to decline pending change');
+    }
+  };
+
+  // Poll for pending changes notifications (for managers)
+  useEffect(() => {
+    if (isManager && project.id && role && name) {
+      const interval = setInterval(() => {
+        api.getUserNotification(project.id, role, name)
+          .then(response => {
+            if (response.command === 'pending_changes' && response.data) {
+              // Open review modal and fetch pending changes
+              fetchPendingChanges();
+              setReviewModalOpen(true);
+              // Clear the notification
+              api.clearUserNotification(project.id, role, name).catch(() => {});
+            }
+          })
+          .catch(err => {
+            // Silently fail
+          });
+      }, 2000);
+
+      return () => clearInterval(interval);
+    }
+  }, [isManager, project.id, role, name, fetchPendingChanges]);
+
+  // Fetch pending changes on mount and periodically
+  useEffect(() => {
+    if (isManager) {
+      fetchPendingChanges();
+      const interval = setInterval(fetchPendingChanges, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isManager, fetchPendingChanges]);
 
   if (isLoadingData) {
     return (
@@ -624,10 +743,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       />
       
       <div style={{ padding: 20 }}>
-        {role !== 'Manager' && isEditing && (
-          <p style={{ color: 'red' }}>Note: Only Managers can enter Edit Mode.</p>
-        )}
-        
         <EditableTable
           tableData={currentTableData}
           setTableData={setCurrentTableData}
@@ -665,6 +780,751 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           )}
         </div>
       </div>
+
+      {/* Pending Changes Review Modal (Manager only) */}
+      {isManager && (
+        <Dialog 
+          open={reviewModalOpen} 
+          onClose={() => {
+            setReviewModalOpen(false);
+            setSelectedPendingChange(null);
+          }}
+          maxWidth="md"
+          fullWidth
+          dir="rtl"
+        >
+          <DialogTitle>בקשות שינויים ממתינות לאישור</DialogTitle>
+          <DialogContent>
+            {pendingChanges.length === 0 ? (
+              <Typography>אין בקשות שינויים ממתינות</Typography>
+            ) : (
+              <Box>
+                {pendingChanges.map((change) => {
+                  const changesData = typeof change.changes_data === 'string' 
+                    ? JSON.parse(change.changes_data) 
+                    : change.changes_data;
+                  
+                  // Compare with current data to show actual changes
+                  const versionChanged = changesData.version && changesData.version !== currentVersion;
+                  const tableDataChanged = changesData.table_data && JSON.stringify(changesData.table_data) !== JSON.stringify(currentTableData);
+                  const scriptsChanged = changesData.periodic_scripts && JSON.stringify(changesData.periodic_scripts) !== JSON.stringify(periodicScripts);
+                  
+                  // Helper to calculate global row number
+                  const getGlobalRowNumber = (tableData, phaseIndex, rowIndex) => {
+                    let count = 0;
+                    for (let i = 0; i < phaseIndex; i++) {
+                      count += tableData[i]?.rows?.length || 0;
+                    }
+                    return count + rowIndex + 1;
+                  };
+                  
+                  // Analyze table data changes
+                  const getTableChanges = () => {
+                    if (!changesData.table_data) return null;
+                    
+                    const currentPhases = new Map(currentTableData.map((p, idx) => [p.phase, { ...p, index: idx }]));
+                    const newPhases = new Map(changesData.table_data.map((p, idx) => [p.phase, { ...p, index: idx }]));
+                    
+                    const addedPhases = [];
+                    const modifiedPhases = [];
+                    const deletedPhases = [];
+                    
+                    // Find added and modified phases
+                    newPhases.forEach((newPhase, phaseNum) => {
+                      const currentPhase = currentPhases.get(phaseNum);
+                      if (!currentPhase) {
+                        addedPhases.push(newPhase);
+                      } else {
+                        const currentRows = new Map(currentPhase.rows.map((r, idx) => [r.id, { ...r, index: idx }]));
+                        const newRows = new Map(newPhase.rows.map((r, idx) => [r.id, { ...r, index: idx }]));
+                        
+                        const addedRows = [];
+                        const modifiedRows = [];
+                        const deletedRows = [];
+                        
+                        newRows.forEach((newRow, rowId) => {
+                          const currentRow = currentRows.get(rowId);
+                          if (!currentRow) {
+                            addedRows.push({ ...newRow, phaseIndex: newPhase.index });
+                          } else if (JSON.stringify(newRow) !== JSON.stringify(currentRow)) {
+                            modifiedRows.push({ 
+                              old: currentRow, 
+                              new: newRow,
+                              phaseIndex: currentPhase.index,
+                              oldRowIndex: currentRow.index,
+                              newRowIndex: newRow.index
+                            });
+                          }
+                        });
+                        
+                        currentRows.forEach((currentRow, rowId) => {
+                          if (!newRows.has(rowId)) {
+                            deletedRows.push({ 
+                              ...currentRow, 
+                              phaseIndex: currentPhase.index,
+                              rowIndex: currentRow.index
+                            });
+                          }
+                        });
+                        
+                        if (addedRows.length > 0 || modifiedRows.length > 0 || deletedRows.length > 0) {
+                          modifiedPhases.push({
+                            phase: phaseNum,
+                            phaseIndex: currentPhase.index,
+                            addedRows,
+                            modifiedRows,
+                            deletedRows
+                          });
+                        }
+                      }
+                    });
+                    
+                    // Find deleted phases
+                    currentPhases.forEach((currentPhase, phaseNum) => {
+                      if (!newPhases.has(phaseNum)) {
+                        deletedPhases.push(currentPhase);
+                      }
+                    });
+                    
+                    return { addedPhases, modifiedPhases, deletedPhases };
+                  };
+                  
+                  // Analyze scripts changes
+                  const getScriptsChanges = () => {
+                    if (!changesData.periodic_scripts) return null;
+                    
+                    const currentScripts = new Map(periodicScripts.map(s => [s.id, s]));
+                    const newScripts = new Map(changesData.periodic_scripts.map(s => [s.id, s]));
+                    
+                    const added = [];
+                    const modified = [];
+                    const deleted = [];
+                    
+                    newScripts.forEach((newScript, id) => {
+                      const currentScript = currentScripts.get(id);
+                      if (!currentScript) {
+                        added.push(newScript);
+                      } else if (JSON.stringify(newScript) !== JSON.stringify(currentScript)) {
+                        modified.push({ old: currentScript, new: newScript });
+                      }
+                    });
+                    
+                    currentScripts.forEach((currentScript, id) => {
+                      if (!newScripts.has(id)) {
+                        deleted.push(currentScript);
+                      }
+                    });
+                    
+                    return { added, modified, deleted };
+                  };
+                  
+                  const tableChanges = getTableChanges();
+                  const scriptsChanges = getScriptsChanges();
+                  
+                  return (
+                    <Box key={change.id} sx={{ mb: 3, p: 2, border: '1px solid #ccc', borderRadius: 1, direction: 'rtl' }}>
+                      <Typography variant="h6" gutterBottom>
+                        בקשה מ-{change.submitted_by} ({change.submitted_by_role})
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        תאריך: {new Date(change.created_at).toLocaleString('he-IL')}
+                      </Typography>
+                      
+                      <Divider sx={{ my: 2 }} />
+                      
+                      {/* Version Changes */}
+                      {versionChanged && (
+                        <Accordion sx={{ 
+                          mb: 1,
+                          bgcolor: '#2d2d2d',
+                          color: 'white',
+                          '&:before': { display: 'none' },
+                          '& .MuiAccordionSummary-root': {
+                            bgcolor: '#1e1e1e',
+                            minHeight: '48px',
+                            '&:hover': { bgcolor: '#333' }
+                          },
+                          '& .MuiAccordionDetails-root': {
+                            bgcolor: '#2d2d2d',
+                            color: 'white'
+                          }
+                        }}>
+                          <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <EditIcon sx={{ color: '#2196f3' }} />
+                              <Typography><strong>שינוי גרסה</strong></Typography>
+                            </Box>
+                          </AccordionSummary>
+                          <AccordionDetails>
+                            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', direction: 'rtl' }}>
+                              <Typography><strong>נוכחי:</strong> <span style={{ color: '#ff6b6b' }}>{currentVersion}</span></Typography>
+                              <Typography>→</Typography>
+                              <Typography><strong>חדש:</strong> <span style={{ color: '#51cf66' }}>{changesData.version}</span></Typography>
+                            </Box>
+                          </AccordionDetails>
+                        </Accordion>
+                      )}
+                      
+                      {/* Table Data Changes */}
+                      {tableDataChanged && tableChanges && (
+                        <Accordion sx={{ 
+                          mb: 1,
+                          bgcolor: '#2d2d2d',
+                          color: 'white',
+                          '&:before': { display: 'none' },
+                          '& .MuiAccordionSummary-root': {
+                            bgcolor: '#1e1e1e',
+                            minHeight: '48px',
+                            '&:hover': { bgcolor: '#333' }
+                          },
+                          '& .MuiAccordionDetails-root': {
+                            bgcolor: '#2d2d2d',
+                            color: 'white'
+                          }
+                        }}>
+                          <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <EditIcon sx={{ color: '#2196f3' }} />
+                              <Typography><strong>שינויים בטבלה</strong></Typography>
+                              {tableChanges.addedPhases.length > 0 && (
+                                <Chip label={`+${tableChanges.addedPhases.length} שלבים`} color="success" size="small" sx={{ bgcolor: '#4caf50', color: 'white' }} />
+                              )}
+                              {tableChanges.modifiedPhases.length > 0 && (
+                                <Chip label={`${tableChanges.modifiedPhases.length} שלבים שונו`} color="warning" size="small" sx={{ bgcolor: '#ff9800', color: 'white' }} />
+                              )}
+                              {tableChanges.deletedPhases.length > 0 && (
+                                <Chip label={`-${tableChanges.deletedPhases.length} שלבים`} color="error" size="small" sx={{ bgcolor: '#f44336', color: 'white' }} />
+                              )}
+                            </Box>
+                          </AccordionSummary>
+                          <AccordionDetails>
+                            {/* Added Phases */}
+                            {tableChanges.addedPhases.length > 0 && (
+                              <Box sx={{ mb: 2 }}>
+                                <Typography variant="subtitle2" sx={{ color: '#51cf66' }} gutterBottom>
+                                  <AddCircleIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  שלבים שנוספו:
+                                </Typography>
+                                {tableChanges.addedPhases.map(phase => (
+                                  <Box key={phase.phase} sx={{ ml: 2, mb: 1 }}>
+                                    <Typography><strong>שלב {phase.phase}</strong> - {phase.rows?.length || 0} שורות</Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                            
+                            {/* Modified Phases */}
+                            {tableChanges.modifiedPhases.length > 0 && (
+                              <Box sx={{ mb: 2 }}>
+                                <Typography variant="subtitle2" sx={{ color: '#ff9800' }} gutterBottom>
+                                  <EditIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  שלבים ששונו:
+                                </Typography>
+                                {tableChanges.modifiedPhases.map(({ phase, addedRows, modifiedRows, deletedRows }) => (
+                                  <Box key={phase} sx={{ ml: 2, mb: 2, p: 1, bgcolor: '#1e1e1e', borderRadius: 1 }}>
+                                    <Typography><strong>שלב {phase}</strong></Typography>
+                                    {addedRows.length > 0 && (
+                                      <Box sx={{ mt: 1 }}>
+                                        <Typography variant="body2" sx={{ color: '#51cf66', mb: 1 }} gutterBottom>
+                                          שורות שנוספו ({addedRows.length}):
+                                        </Typography>
+                                        {addedRows.map((addedRow, idx) => {
+                                          // Calculate what the row number would be in the new data
+                                          const newPhaseIndex = changesData.table_data.findIndex(p => p.phase === phase);
+                                          const newRowIndex = changesData.table_data[newPhaseIndex]?.rows?.findIndex(r => r.id === addedRow.id);
+                                          const newGlobalRowNumber = newRowIndex !== undefined && newRowIndex !== -1 
+                                            ? getGlobalRowNumber(changesData.table_data, newPhaseIndex, newRowIndex)
+                                            : null;
+                                          
+                                          return (
+                                            <Accordion 
+                                              key={idx} 
+                                              sx={{ 
+                                                mb: 1,
+                                                bgcolor: '#2d2d2d',
+                                                color: 'white',
+                                                '&:before': { display: 'none' },
+                                                '& .MuiAccordionSummary-root': {
+                                                  bgcolor: '#1e1e1e',
+                                                  minHeight: '48px',
+                                                  '&:hover': { bgcolor: '#333' }
+                                                },
+                                                '& .MuiAccordionDetails-root': {
+                                                  bgcolor: '#2d2d2d',
+                                                  color: 'white'
+                                                }
+                                              }}
+                                            >
+                                              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                                                <Typography>
+                                                  <strong>שורה חדשה</strong> {newGlobalRowNumber && `(יהיה #${newGlobalRowNumber})`} - שלב {phase}
+                                                </Typography>
+                                              </AccordionSummary>
+                                              <AccordionDetails>
+                                                <Box sx={{ direction: 'rtl' }}>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>תפקיד:</strong> {addedRow.role}
+                                                  </Typography>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>זמן:</strong> {addedRow.time}
+                                                  </Typography>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>משך:</strong> {addedRow.duration}
+                                                  </Typography>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>תיאור:</strong> {addedRow.description || '(ריק)'}
+                                                  </Typography>
+                                                  {addedRow.script && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>סקריפט:</strong> {addedRow.script}
+                                                    </Typography>
+                                                  )}
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>סטטוס:</strong> {addedRow.status}
+                                                  </Typography>
+                                                  <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
+                                                    <Button
+                                                      variant="contained"
+                                                      color="success"
+                                                      size="small"
+                                                      onClick={async () => {
+                                                        // Accept row addition - create the row
+                                                        try {
+                                                          const phaseObj = await api.getPhases(project.id);
+                                                          const phaseData = phaseObj.find(p => p.phase === phase);
+                                                          if (phaseData) {
+                                                            await api.acceptPendingChangeRow(
+                                                              project.id,
+                                                              change.id,
+                                                              null,
+                                                              'create',
+                                                              {
+                                                                role: addedRow.role,
+                                                                time: addedRow.time,
+                                                                duration: addedRow.duration,
+                                                                description: addedRow.description,
+                                                                script: addedRow.script,
+                                                                status: addedRow.status
+                                                              },
+                                                              phaseData.id
+                                                            );
+                                                            await loadProjectData(false);
+                                                            const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+                                                            setPendingChanges(updatedChanges);
+                                                          }
+                                                        } catch (error) {
+                                                          console.error('Failed to accept row addition', error);
+                                                          setDataError(error.message || 'Failed to accept row addition');
+                                                        }
+                                                      }}
+                                                    >
+                                                      אישור
+                                                    </Button>
+                                                    <Button
+                                                      variant="contained"
+                                                      color="error"
+                                                      size="small"
+                                                      onClick={async () => {
+                                                        // Decline row addition - remove from pending changes
+                                                        try {
+                                                          // Update pending change to remove this row
+                                                          const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+                                                          setPendingChanges(updatedChanges);
+                                                        } catch (error) {
+                                                          console.error('Failed to decline row addition', error);
+                                                        }
+                                                      }}
+                                                    >
+                                                      דחייה
+                                                    </Button>
+                                                  </Box>
+                                                </Box>
+                                              </AccordionDetails>
+                                            </Accordion>
+                                          );
+                                        })}
+                                      </Box>
+                                    )}
+                                    {modifiedRows.length > 0 && (
+                                      <Box sx={{ mt: 1 }}>
+                                        <Typography variant="body2" color="warning.main" gutterBottom>
+                                          שורות ששונו ({modifiedRows.length}):
+                                        </Typography>
+                                        {modifiedRows.map(({ old, new: newRow, phaseIndex, oldRowIndex }, idx) => {
+                                          return (
+                                            <Accordion 
+                                              key={idx} 
+                                              sx={{ 
+                                                mb: 1,
+                                                bgcolor: '#2d2d2d',
+                                                color: 'white',
+                                                '&:before': { display: 'none' },
+                                                '& .MuiAccordionSummary-root': {
+                                                  bgcolor: '#1e1e1e',
+                                                  minHeight: '48px',
+                                                  '&:hover': { bgcolor: '#333' }
+                                                },
+                                                '& .MuiAccordionDetails-root': {
+                                                  bgcolor: '#2d2d2d',
+                                                  color: 'white'
+                                                }
+                                              }}
+                                            >
+                                              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                                                <Typography>
+                                                  <strong>שורה שונתה</strong> - שלב {phase}
+                                                </Typography>
+                                              </AccordionSummary>
+                                              <AccordionDetails>
+                                                <Box sx={{ direction: 'rtl' }}>
+                                                  {old.role !== newRow.role && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>תפקיד:</strong> <span style={{ color: '#ff6b6b' }}>{old.role}</span> → <span style={{ color: '#51cf66' }}>{newRow.role}</span>
+                                                    </Typography>
+                                                  )}
+                                                  {old.time !== newRow.time && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>זמן:</strong> <span style={{ color: '#ff6b6b' }}>{old.time}</span> → <span style={{ color: '#51cf66' }}>{newRow.time}</span>
+                                                    </Typography>
+                                                  )}
+                                                  {old.duration !== newRow.duration && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>משך:</strong> <span style={{ color: '#ff6b6b' }}>{old.duration}</span> → <span style={{ color: '#51cf66' }}>{newRow.duration}</span>
+                                                    </Typography>
+                                                  )}
+                                                  {old.description !== newRow.description && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>תיאור:</strong> <span style={{ color: '#ff6b6b' }}>{old.description || '(ריק)'}</span> → <span style={{ color: '#51cf66' }}>{newRow.description || '(ריק)'}</span>
+                                                    </Typography>
+                                                  )}
+                                                  {old.script !== newRow.script && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>סקריפט:</strong> <span style={{ color: '#ff6b6b' }}>{old.script || '(ריק)'}</span> → <span style={{ color: '#51cf66' }}>{newRow.script || '(ריק)'}</span>
+                                                    </Typography>
+                                                  )}
+                                                  {old.status !== newRow.status && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>סטטוס:</strong> <span style={{ color: '#ff6b6b' }}>{old.status}</span> → <span style={{ color: '#51cf66' }}>{newRow.status}</span>
+                                                    </Typography>
+                                                  )}
+                                                  <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
+                                                    <Button
+                                                      variant="contained"
+                                                      color="success"
+                                                      size="small"
+                                                      onClick={async () => {
+                                                        // Accept row change - apply the new values
+                                                        try {
+                                                          await api.acceptPendingChangeRow(
+                                                            project.id,
+                                                            change.id,
+                                                            old.id,
+                                                            'update',
+                                                            {
+                                                              role: newRow.role,
+                                                              time: newRow.time,
+                                                              duration: newRow.duration,
+                                                              description: newRow.description,
+                                                              script: newRow.script,
+                                                              status: newRow.status
+                                                            }
+                                                          );
+                                                          await loadProjectData(false);
+                                                          const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+                                                          setPendingChanges(updatedChanges);
+                                                        } catch (error) {
+                                                          console.error('Failed to accept row change', error);
+                                                          setDataError(error.message || 'Failed to accept row change');
+                                                        }
+                                                      }}
+                                                    >
+                                                      אישור
+                                                    </Button>
+                                                    <Button
+                                                      variant="contained"
+                                                      color="error"
+                                                      size="small"
+                                                      onClick={async () => {
+                                                        // Decline row change - remove from pending changes
+                                                        try {
+                                                          // The row stays as-is, we just need to refresh to see updated pending changes
+                                                          const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+                                                          setPendingChanges(updatedChanges);
+                                                        } catch (error) {
+                                                          console.error('Failed to decline row change', error);
+                                                        }
+                                                      }}
+                                                    >
+                                                      דחייה
+                                                    </Button>
+                                                  </Box>
+                                                </Box>
+                                              </AccordionDetails>
+                                            </Accordion>
+                                          );
+                                        })}
+                                      </Box>
+                                    )}
+                                    {deletedRows.length > 0 && (
+                                      <Box sx={{ mt: 1 }}>
+                                        <Typography variant="body2" sx={{ color: '#f44336' }} gutterBottom>
+                                          שורות שנמחקו ({deletedRows.length}):
+                                        </Typography>
+                                        {deletedRows.map((deletedRow, idx) => {
+                                          return (
+                                            <Accordion 
+                                              key={idx} 
+                                              sx={{ 
+                                                mb: 1,
+                                                bgcolor: '#2d2d2d',
+                                                color: 'white',
+                                                '&:before': { display: 'none' },
+                                                '& .MuiAccordionSummary-root': {
+                                                  bgcolor: '#1e1e1e',
+                                                  minHeight: '48px',
+                                                  '&:hover': { bgcolor: '#333' }
+                                                },
+                                                '& .MuiAccordionDetails-root': {
+                                                  bgcolor: '#2d2d2d',
+                                                  color: 'white'
+                                                }
+                                              }}
+                                            >
+                                              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                                                <Typography>
+                                                  <strong>שורה שנמחקה</strong> - שלב {phase}
+                                                </Typography>
+                                              </AccordionSummary>
+                                              <AccordionDetails>
+                                                <Box sx={{ direction: 'rtl' }}>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>תפקיד:</strong> {deletedRow.role}
+                                                  </Typography>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>זמן:</strong> {deletedRow.time}
+                                                  </Typography>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>משך:</strong> {deletedRow.duration}
+                                                  </Typography>
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>תיאור:</strong> {deletedRow.description || '(ריק)'}
+                                                  </Typography>
+                                                  {deletedRow.script && (
+                                                    <Typography variant="body2" sx={{ mb: 1 }}>
+                                                      <strong>סקריפט:</strong> {deletedRow.script}
+                                                    </Typography>
+                                                  )}
+                                                  <Typography variant="body2" sx={{ mb: 1 }}>
+                                                    <strong>סטטוס:</strong> {deletedRow.status}
+                                                  </Typography>
+                                                  <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
+                                                    <Button
+                                                      variant="contained"
+                                                      color="success"
+                                                      size="small"
+                                                      onClick={async () => {
+                                                        // Accept deletion - delete the row
+                                                        try {
+                                                          await api.acceptPendingChangeRow(
+                                                            project.id,
+                                                            change.id,
+                                                            deletedRow.id,
+                                                            'delete',
+                                                            null
+                                                          );
+                                                          await loadProjectData(false);
+                                                          const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+                                                          setPendingChanges(updatedChanges);
+                                                        } catch (error) {
+                                                          console.error('Failed to accept row deletion', error);
+                                                          setDataError(error.message || 'Failed to accept row deletion');
+                                                        }
+                                                      }}
+                                                    >
+                                                      אישור
+                                                    </Button>
+                                                    <Button
+                                                      variant="contained"
+                                                      color="error"
+                                                      size="small"
+                                                      onClick={async () => {
+                                                        // Decline deletion - keep the row (remove from changes)
+                                                        try {
+                                                          const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+                                                          setPendingChanges(updatedChanges);
+                                                        } catch (error) {
+                                                          console.error('Failed to decline row deletion', error);
+                                                        }
+                                                      }}
+                                                    >
+                                                      דחייה
+                                                    </Button>
+                                                  </Box>
+                                                </Box>
+                                              </AccordionDetails>
+                                            </Accordion>
+                                          );
+                                        })}
+                                      </Box>
+                                    )}
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                            
+                            {/* Deleted Phases */}
+                            {tableChanges.deletedPhases.length > 0 && (
+                              <Box>
+                                <Typography variant="subtitle2" sx={{ color: '#f44336' }} gutterBottom>
+                                  <RemoveCircleIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  שלבים שנמחקו:
+                                </Typography>
+                                {tableChanges.deletedPhases.map(phase => (
+                                  <Box key={phase.phase} sx={{ ml: 2, mb: 1 }}>
+                                    <Typography><strong>שלב {phase.phase}</strong> - {phase.rows?.length || 0} שורות</Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                          </AccordionDetails>
+                        </Accordion>
+                      )}
+                      
+                      {/* Periodic Scripts Changes */}
+                      {scriptsChanged && scriptsChanges && (
+                        <Accordion sx={{ 
+                          mb: 1,
+                          bgcolor: '#2d2d2d',
+                          color: 'white',
+                          '&:before': { display: 'none' },
+                          '& .MuiAccordionSummary-root': {
+                            bgcolor: '#1e1e1e',
+                            minHeight: '48px',
+                            '&:hover': { bgcolor: '#333' }
+                          },
+                          '& .MuiAccordionDetails-root': {
+                            bgcolor: '#2d2d2d',
+                            color: 'white'
+                          }
+                        }}>
+                          <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <EditIcon sx={{ color: '#2196f3' }} />
+                              <Typography><strong>שינויים בסקריפטים תקופתיים</strong></Typography>
+                              {scriptsChanges.added.length > 0 && (
+                                <Chip label={`+${scriptsChanges.added.length}`} color="success" size="small" sx={{ bgcolor: '#4caf50', color: 'white' }} />
+                              )}
+                              {scriptsChanges.modified.length > 0 && (
+                                <Chip label={`${scriptsChanges.modified.length} שונו`} color="warning" size="small" sx={{ bgcolor: '#ff9800', color: 'white' }} />
+                              )}
+                              {scriptsChanges.deleted.length > 0 && (
+                                <Chip label={`-${scriptsChanges.deleted.length}`} color="error" size="small" sx={{ bgcolor: '#f44336', color: 'white' }} />
+                              )}
+                            </Box>
+                          </AccordionSummary>
+                          <AccordionDetails>
+                            {/* Added Scripts */}
+                            {scriptsChanges.added.length > 0 && (
+                              <Box sx={{ mb: 2 }}>
+                                <Typography variant="subtitle2" sx={{ color: '#51cf66' }} gutterBottom>
+                                  <AddCircleIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  סקריפטים שנוספו:
+                                </Typography>
+                                {scriptsChanges.added.map(script => (
+                                  <Box key={script.id} sx={{ ml: 2, mb: 0.5 }}>
+                                    <Typography><strong>{script.name}</strong> - {script.path}</Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                            
+                            {/* Modified Scripts */}
+                            {scriptsChanges.modified.length > 0 && (
+                              <Box sx={{ mb: 2 }}>
+                                <Typography variant="subtitle2" sx={{ color: '#ff9800' }} gutterBottom>
+                                  <EditIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  סקריפטים ששונו:
+                                </Typography>
+                                {scriptsChanges.modified.map(({ old, new: newScript }, idx) => (
+                                  <Box key={idx} sx={{ ml: 2, mb: 1, p: 1, bgcolor: '#1e1e1e', borderRadius: 1 }}>
+                                    <Typography><strong>{old.name}</strong></Typography>
+                                    {old.name !== newScript.name && (
+                                      <Typography variant="body2" display="block" sx={{ mt: 0.5 }}>
+                                        שם: <span style={{ color: '#ff6b6b' }}>{old.name}</span> → <span style={{ color: '#51cf66' }}>{newScript.name}</span>
+                                      </Typography>
+                                    )}
+                                    {old.path !== newScript.path && (
+                                      <Typography variant="body2" display="block" sx={{ mt: 0.5 }}>
+                                        נתיב: <span style={{ color: '#ff6b6b' }}>{old.path}</span> → <span style={{ color: '#51cf66' }}>{newScript.path}</span>
+                                      </Typography>
+                                    )}
+                                    {old.status !== newScript.status && (
+                                      <Typography variant="body2" display="block" sx={{ mt: 0.5 }}>
+                                        סטטוס: <span style={{ color: '#ff6b6b' }}>{old.status ? 'פעיל' : 'לא פעיל'}</span> → <span style={{ color: '#51cf66' }}>{newScript.status ? 'פעיל' : 'לא פעיל'}</span>
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                            
+                            {/* Deleted Scripts */}
+                            {scriptsChanges.deleted.length > 0 && (
+                              <Box>
+                                <Typography variant="subtitle2" sx={{ color: '#f44336' }} gutterBottom>
+                                  <RemoveCircleIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  סקריפטים שנמחקו:
+                                </Typography>
+                                {scriptsChanges.deleted.map(script => (
+                                  <Box key={script.id} sx={{ ml: 2, mb: 0.5 }}>
+                                    <Typography><strong>{script.name}</strong> - {script.path}</Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                          </AccordionDetails>
+                        </Accordion>
+                      )}
+                      
+                      <Divider sx={{ my: 2 }} />
+                      
+                      <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
+                        <Button
+                          variant="contained"
+                          color="success"
+                          onClick={() => handleAcceptPendingChange(change.id)}
+                          sx={{ minWidth: 100 }}
+                        >
+                          אישור
+                        </Button>
+                        <Button
+                          variant="contained"
+                          color="error"
+                          onClick={() => handleDeclinePendingChange(change.id)}
+                          sx={{ minWidth: 100 }}
+                        >
+                          דחייה
+                        </Button>
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions style={{ direction: 'rtl' }}>
+            <Typography variant="body2" sx={{ mr: 2, color: 'text.secondary' }}>
+              {pendingChanges.length > 0 && `${pendingChanges.length} בקשות ממתינות`}
+            </Typography>
+            <Button onClick={() => {
+              setReviewModalOpen(false);
+              setSelectedPendingChange(null);
+            }}>
+              סגור
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </div>
   );
 };

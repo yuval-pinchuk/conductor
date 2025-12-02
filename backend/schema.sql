@@ -100,6 +100,23 @@ CREATE TABLE `users` (
 
 -- Create unique index for active users only (allows multiple inactive users)
 -- Note: MySQL doesn't support partial unique indexes directly, so we'll enforce this in application logic
+
+-- Pending changes table (for non-manager edit requests)
+CREATE TABLE `pending_changes` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `project_id` INT NOT NULL,
+  `submitted_by` VARCHAR(255) NOT NULL,
+  `submitted_by_role` VARCHAR(100) NOT NULL,
+  `change_type` VARCHAR(50) NOT NULL, -- 'table_data', 'version', 'periodic_scripts', 'all'
+  `changes_data` TEXT NOT NULL, -- JSON string with the changes
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'accepted', 'declined'
+  `reviewed_by` VARCHAR(255) NULL,
+  `reviewed_at` DATETIME NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_pending_changes_project`
+    FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB;
  
  -- Optional seed data (comment out if not needed)
  -- INSERT INTO `projects` (`name`, `version`) VALUES ('Project Alpha', 'v1.2.5');

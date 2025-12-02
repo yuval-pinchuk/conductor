@@ -134,5 +134,34 @@ export const api = {
       method: 'POST',
       body: { role, name },
     }),
+
+  // Pending Changes
+  createPendingChange: (projectId, submittedBy, submittedByRole, changeType, changesData) =>
+    request(`/api/projects/${projectId}/pending-changes`, {
+      method: 'POST',
+      body: {
+        submitted_by: submittedBy,
+        submitted_by_role: submittedByRole,
+        change_type: changeType,
+        changes_data: changesData,
+      },
+    }),
+  getPendingChanges: (projectId, status = 'pending') =>
+    request(`/api/projects/${projectId}/pending-changes?status=${status}`),
+  acceptPendingChange: (projectId, changeId, reviewedBy) =>
+    request(`/api/projects/${projectId}/pending-changes/${changeId}/accept`, {
+      method: 'POST',
+      body: { reviewed_by: reviewedBy },
+    }),
+  acceptPendingChangeRow: (projectId, changeId, rowId, action, rowData, phaseId = null) =>
+    request(`/api/projects/${projectId}/pending-changes/${changeId}/accept-row`, {
+      method: 'POST',
+      body: { row_id: rowId, action, row_data: rowData, phase_id: phaseId },
+    }),
+  declinePendingChange: (projectId, changeId, reviewedBy) =>
+    request(`/api/projects/${projectId}/pending-changes/${changeId}/decline`, {
+      method: 'POST',
+      body: { reviewed_by: reviewedBy },
+    }),
 };
 
