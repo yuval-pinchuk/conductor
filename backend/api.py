@@ -524,10 +524,15 @@ def register_login(project_id):
 @api.route('/api/projects/<int:project_id>/logout', methods=['POST'])
 def register_logout(project_id):
     """Register a user logout - frees up the role"""
-    data = request.get_json()
-    
-    name = (data.get('name') or '').strip()
-    role = (data.get('role') or '').strip()
+    # Handle both JSON and FormData (for sendBeacon)
+    if request.is_json:
+        data = request.get_json() or {}
+        name = (data.get('name') or '').strip()
+        role = (data.get('role') or '').strip()
+    else:
+        # Handle FormData (from sendBeacon)
+        name = (request.form.get('name') or '').strip()
+        role = (request.form.get('role') or '').strip()
     
     if not name or not role:
         return jsonify({'error': 'Name and role are required'}), 400
