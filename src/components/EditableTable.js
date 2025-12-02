@@ -104,8 +104,12 @@ const EditableTable = ({
   const [userInfoModal, setUserInfoModal] = useState({ open: false, row: null, phaseIndex: null, rowIndex: null });
   const [lastProcessedNotificationTimestamp, setLastProcessedNotificationTimestamp] = useState(null);
   const [noUserWarning, setNoUserWarning] = useState({ open: false, role: '' });
+  const [periodicScriptsHeight, setPeriodicScriptsHeight] = useState(80); // Default estimate
+  const [tableHeaderHeight, setTableHeaderHeight] = useState(53); // Default estimate
   const rowRefs = useRef({});
   const tableContainerRef = useRef(null);
+  const periodicScriptsRef = useRef(null);
+  const tableHeaderRef = useRef(null);
   
   const handleChange = (phaseIndex, rowIndex, field, newValue) => {
     const newPhases = [...tableData];
@@ -365,6 +369,42 @@ const EditableTable = ({
     }
   }, [isManager, projectId, userRole, userName, lastProcessedNotificationTimestamp, tableData]);
 
+  // Measure periodic scripts height for sticky positioning
+  useEffect(() => {
+    if (periodicScriptsRef.current) {
+      const updateHeight = () => {
+        const height = periodicScriptsRef.current?.offsetHeight || 80;
+        setPeriodicScriptsHeight(height);
+      };
+      updateHeight();
+      // Update on window resize
+      window.addEventListener('resize', updateHeight);
+      return () => window.removeEventListener('resize', updateHeight);
+    }
+  }, [periodicScripts, isEditing, isManager]);
+
+  // Measure table header height for sticky positioning
+  useEffect(() => {
+    if (tableHeaderRef.current) {
+      const updateHeight = () => {
+        const height = tableHeaderRef.current?.offsetHeight || 53;
+        setTableHeaderHeight(height);
+      };
+      // Use requestAnimationFrame to ensure the table is rendered
+      const rafId = requestAnimationFrame(() => {
+        updateHeight();
+        // Also check after a small delay to catch any late rendering
+        setTimeout(updateHeight, 100);
+      });
+      // Update on window resize
+      window.addEventListener('resize', updateHeight);
+      return () => {
+        cancelAnimationFrame(rafId);
+        window.removeEventListener('resize', updateHeight);
+      };
+    }
+  }, [isEditing, tableData]);
+
   return (
       <TableContainer 
         ref={tableContainerRef}
@@ -373,7 +413,9 @@ const EditableTable = ({
       >
       
         {/* Periodic Scripts Row - Sticky */}
-        <div style={{ 
+        <div 
+          ref={periodicScriptsRef}
+          style={{ 
           padding: '15px', 
           borderBottom: '2px solid #444', 
           backgroundColor: '#1e1e1e', 
@@ -556,17 +598,24 @@ const EditableTable = ({
           </div>
         )}
 
-      <Table stickyHeader size="small" sx={{ '& .MuiTableCell-root': { fontSize: '1rem' }, '& .MuiTableHead-root': { position: 'sticky', top: 0, zIndex: 10 } }}>
+      <Table stickyHeader size="small" sx={{ 
+        '& .MuiTableCell-root': { fontSize: '1rem' }, 
+        '& .MuiTableHead-root': { 
+          position: 'sticky', 
+          top: `${periodicScriptsHeight}px`, 
+          zIndex: 9 
+        } 
+      }}>
         <TableHead>
-          <TableRow>
-            <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>#</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>תפקיד</TableCell>
-            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>זמן</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>משך</TableCell>
-            <TableCell style={{ width: '35%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>תיאור</TableCell>
-            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>סקריפט</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>סטטוס</TableCell>
-            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>פעולות</TableCell>}
+          <TableRow ref={tableHeaderRef}>
+            <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>#</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>תפקיד</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>זמן</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>משך</TableCell>
+            <TableCell style={{ width: '35%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>תיאור</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>סקריפט</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>סטטוס</TableCell>
+            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>פעולות</TableCell>}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -584,8 +633,8 @@ const EditableTable = ({
                       textAlign: 'right',
                       fontSize: '1.1rem',
                       position: 'sticky',
-                      top: '53px',
-                      zIndex: 9
+                      top: `${periodicScriptsHeight + tableHeaderHeight}px`, // Below periodic scripts + table header height
+                      zIndex: 8
                   }}>
                     שלב {phase.phase}
                     {/* Phase Activation Toggle */}
