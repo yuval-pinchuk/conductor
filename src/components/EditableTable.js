@@ -105,10 +105,12 @@ const EditableTable = ({
   const [lastProcessedNotificationTimestamp, setLastProcessedNotificationTimestamp] = useState(null);
   const [noUserWarning, setNoUserWarning] = useState({ open: false, role: '' });
   const [periodicScriptsHeight, setPeriodicScriptsHeight] = useState(80); // Default estimate
+  const [nextRowHeight, setNextRowHeight] = useState(60); // Default estimate for next row display
   const [tableHeaderHeight, setTableHeaderHeight] = useState(53); // Default estimate
   const rowRefs = useRef({});
   const tableContainerRef = useRef(null);
   const periodicScriptsRef = useRef(null);
+  const nextRowRef = useRef(null);
   const tableHeaderRef = useRef(null);
   
   const handleChange = (phaseIndex, rowIndex, field, newValue) => {
@@ -321,6 +323,32 @@ const EditableTable = ({
     return count + rowIndex + 1;
   };
 
+  // Find the next relevant row with N/A status
+  const getNextRelevantRow = () => {
+    for (let phaseIndex = 0; phaseIndex < tableData.length; phaseIndex++) {
+      const phase = tableData[phaseIndex];
+      for (let rowIndex = 0; rowIndex < phase.rows.length; rowIndex++) {
+        const row = phase.rows[rowIndex];
+        const isStatusNA = !row.status || row.status === 'N/A';
+        
+        if (isStatusNA) {
+          // Manager sees any N/A row, users only see their role's N/A rows
+          if (isManager || row.role === userRole) {
+            return {
+              row,
+              phaseIndex,
+              rowIndex,
+              globalRowNumber: getGlobalRowNumber(phaseIndex, rowIndex)
+            };
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const nextRelevantRow = getNextRelevantRow();
+
   // Process notification command (for non-manager users)
   const processNotification = (command, notificationData) => {
     if (!command || !notificationData) return;
@@ -382,6 +410,23 @@ const EditableTable = ({
       return () => window.removeEventListener('resize', updateHeight);
     }
   }, [periodicScripts, isEditing, isManager]);
+
+  // Measure next row height for sticky positioning
+  useEffect(() => {
+    if (nextRelevantRow && nextRowRef.current) {
+      const updateHeight = () => {
+        const height = nextRowRef.current?.offsetHeight || 60;
+        setNextRowHeight(height);
+      };
+      updateHeight();
+      // Update on window resize
+      window.addEventListener('resize', updateHeight);
+      return () => window.removeEventListener('resize', updateHeight);
+    } else if (!nextRelevantRow) {
+      // No next row, set height to 0
+      setNextRowHeight(0);
+    }
+  }, [nextRelevantRow, isEditing]);
 
   // Measure table header height for sticky positioning
   useEffect(() => {
@@ -567,6 +612,52 @@ const EditableTable = ({
             )}
           </div>
         </div>
+
+        {/* Next Relevant Row Display - Sticky */}
+        {nextRelevantRow && (
+          <div 
+            ref={nextRowRef}
+            style={{ 
+              padding: '10px 15px', 
+              borderBottom: '2px solid #2196f3', 
+              backgroundColor: '#0d47a1', 
+              direction: 'rtl',
+              position: 'sticky',
+              top: `${periodicScriptsHeight}px`,
+              zIndex: 9,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 15,
+              color: 'white',
+              fontSize: '1rem'
+            }}
+          >
+            <Typography variant="body1" style={{ fontWeight: 'bold', minWidth: '120px' }}>
+              משימה הבאה:
+            </Typography>
+            <Typography variant="body1" style={{ minWidth: '80px' }}>
+              <strong>שורה #{nextRelevantRow.globalRowNumber}</strong>
+            </Typography>
+            <Typography variant="body1" style={{ minWidth: '100px' }}>
+              <strong>תפקיד:</strong> {nextRelevantRow.row.role}
+            </Typography>
+            <Typography variant="body1" style={{ minWidth: '120px' }}>
+              <strong>זמן:</strong> {nextRelevantRow.row.time}
+            </Typography>
+            <Typography variant="body1" style={{ flex: 1 }}>
+              <strong>תיאור:</strong> {nextRelevantRow.row.description || 'אין תיאור'}
+            </Typography>
+            <Button
+              variant="contained"
+              color="success"
+              size="small"
+              onClick={() => handleJumpToRow(nextRelevantRow.phaseIndex, nextRelevantRow.rowIndex)}
+              style={{ marginRight: 'auto' }}
+            >
+              קפוץ לשורה
+            </Button>
+          </div>
+        )}
       
         {/* Manager Controls Area */}
         {isEditing && (
@@ -602,20 +693,20 @@ const EditableTable = ({
         '& .MuiTableCell-root': { fontSize: '1rem' }, 
         '& .MuiTableHead-root': { 
           position: 'sticky', 
-          top: `${periodicScriptsHeight}px`, 
-          zIndex: 9 
+          top: `${periodicScriptsHeight + nextRowHeight}px`, 
+          zIndex: 8 
         } 
       }}>
         <TableHead>
           <TableRow ref={tableHeaderRef}>
-            <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>#</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>תפקיד</TableCell>
-            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>זמן</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>משך</TableCell>
-            <TableCell style={{ width: '35%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>תיאור</TableCell>
-            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>סקריפט</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>סטטוס</TableCell>
-            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight}px`, zIndex: 9 }}>פעולות</TableCell>}
+            <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>#</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>תפקיד</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>זמן</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>משך</TableCell>
+            <TableCell style={{ width: '35%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>תיאור</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>סקריפט</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>סטטוס</TableCell>
+            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>פעולות</TableCell>}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -633,8 +724,8 @@ const EditableTable = ({
                       textAlign: 'right',
                       fontSize: '1.1rem',
                       position: 'sticky',
-                      top: `${periodicScriptsHeight + tableHeaderHeight}px`, // Below periodic scripts + table header height
-                      zIndex: 8
+                      top: `${periodicScriptsHeight + nextRowHeight + tableHeaderHeight}px`, // Below periodic scripts + next row + table header height
+                      zIndex: 7
                   }}>
                     שלב {phase.phase}
                     {/* Phase Activation Toggle */}
