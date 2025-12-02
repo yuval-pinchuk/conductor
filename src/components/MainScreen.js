@@ -51,6 +51,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Periodic Scripts State
   const [periodicScripts, setPeriodicScripts] = useState([]);
   const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([]);
+  
+  // Active Logins State
+  const [activeLogins, setActiveLogins] = useState([]);
 
   // Loading states
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -452,6 +455,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       if (isInitialLoad) {
         setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsResponse)));
       }
+      
+      // Fetch active logins
+      try {
+        const loginsResponse = await api.getActiveLogins(project.id);
+        setActiveLogins(loginsResponse);
+      } catch (error) {
+        console.error('Failed to fetch active logins', error);
+        setActiveLogins([]);
+      }
     } catch (error) {
       console.error('Failed to load project data', error);
       if (isInitialLoad) {
@@ -472,6 +484,19 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   useInterval(() => {
     if (!isEditing && !isLoadingData && !isSaving) {
       loadProjectData(false);
+    }
+  }, 2000);
+
+  // Poll for active logins every 2 seconds
+  useInterval(() => {
+    if (!isLoadingData && !isSaving) {
+      api.getActiveLogins(project.id)
+        .then(logins => {
+          setActiveLogins(logins);
+        })
+        .catch(err => {
+          // Silently fail - polling is not critical
+        });
     }
   }, 2000);
 
@@ -619,6 +644,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           isClockRunning={isRunning || (isUsingTargetTime && !!targetDateTime)}
           onRowStatusChange={handleRowStatusChange}
           onRunRowScript={handleRunRowScript}
+          activeLogins={activeLogins}
+          projectId={project.id}
+          userName={name}
         />
         
         <div style={{ marginTop: 20, display: 'flex', gap: 12 }}>

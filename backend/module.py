@@ -158,6 +158,9 @@ class User(db.Model):
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False)
     role = db.Column(db.String(100), nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    notification_command = db.Column(db.String(50), nullable=True)  # 'show_modal'
+    notification_data = db.Column(db.Text, nullable=True)  # JSON string with notification data
+    notification_timestamp = db.Column(db.DateTime, nullable=True)
     last_login = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -168,6 +171,9 @@ class User(db.Model):
             'project_id': self.project_id,
             'role': self.role,
             'is_active': self.is_active,
+            'notification_command': self.notification_command,
+            'notification_data': self.notification_data,
+            'notification_timestamp': self.notification_timestamp.isoformat() if self.notification_timestamp else None,
             'last_login': self.last_login.isoformat() if self.last_login else None
         }
 

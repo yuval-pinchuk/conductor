@@ -120,5 +120,19 @@ export const api = {
       method: 'POST',
       body: { name, role },
     }),
+
+  // User notifications
+  createUserNotification: (projectId, targetRole, command, data = {}) =>
+    request(`/api/projects/${projectId}/user-notification`, {
+      method: 'POST',
+      body: { targetRole, command, data },
+    }),
+  getUserNotification: (projectId, role, name) =>
+    request(`/api/projects/${projectId}/user-notification?role=${encodeURIComponent(role)}&name=${encodeURIComponent(name)}`),
+  clearUserNotification: (projectId, role, name) =>
+    request(`/api/projects/${projectId}/user-notification/clear`, {
+      method: 'POST',
+      body: { role, name },
+    }),
 };
 

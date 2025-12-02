@@ -552,3 +552,94 @@ def register_logout(project_id):
     else:
         return jsonify({'error': 'Active login not found'}), 404
 
+
+@api.route('/api/projects/<int:project_id>/user-notification', methods=['POST'])
+def create_user_notification(project_id):
+    """Create a notification for a specific user (by role)"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    target_role = (data.get('targetRole') or '').strip()
+    command = data.get('command')  # 'show_modal'
+    notification_data = data.get('data', {})
+    
+    if not target_role:
+        return jsonify({'error': 'Target role is required'}), 400
+    
+    # Find the active user with that role
+    user = User.query.filter_by(
+        project_id=project_id,
+        role=target_role,
+        is_active=True
+    ).first()
+    
+    if not user:
+        return jsonify({'error': f'No active user found with role "{target_role}"'}), 404
+    
+    # Set notification for that user
+    import json
+    user.notification_command = command
+    user.notification_data = json.dumps(notification_data) if notification_data else None
+    user.notification_timestamp = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify(user.to_dict()), 200
+
+
+@api.route('/api/projects/<int:project_id>/user-notification', methods=['GET'])
+def get_user_notification(project_id):
+    """Get notification for the current user (by role and name)"""
+    project = Project.query.get_or_404(project_id)
+    role = request.args.get('role', '').strip()
+    name = request.args.get('name', '').strip()
+    
+    if not role or not name:
+        return jsonify({'error': 'Role and name are required'}), 400
+    
+    user = User.query.filter_by(
+        project_id=project_id,
+        role=role,
+        name=name,
+        is_active=True
+    ).first()
+    
+    if not user:
+        return jsonify({
+            'command': None,
+            'data': None,
+            'timestamp': None
+        }), 200
+    
+    return jsonify({
+        'command': user.notification_command,
+        'data': json.loads(user.notification_data) if user.notification_data else None,
+        'timestamp': user.notification_timestamp.isoformat() if user.notification_timestamp else None
+    }), 200
+
+
+@api.route('/api/projects/<int:project_id>/user-notification/clear', methods=['POST'])
+def clear_user_notification(project_id):
+    """Clear notification for the current user"""
+    data = request.get_json()
+    role = (data.get('role') or '').strip()
+    name = (data.get('name') or '').strip()
+    
+    if not role or not name:
+        return jsonify({'error': 'Role and name are required'}), 400
+    
+    user = User.query.filter_by(
+        project_id=project_id,
+        role=role,
+        name=name,
+        is_active=True
+    ).first()
+    
+    if user:
+        user.notification_command = None
+        user.notification_data = None
+        user.notification_timestamp = None
+        db.session.commit()
+        return jsonify({'message': 'Notification cleared'}), 200
+    else:
+        return jsonify({'error': 'Active user not found'}), 404
+

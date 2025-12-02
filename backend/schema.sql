@@ -88,6 +88,9 @@ CREATE TABLE `users` (
   `project_id` INT NOT NULL,
   `role` VARCHAR(100) NOT NULL,
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `notification_command` VARCHAR(50) NULL,
+  `notification_data` TEXT NULL,
+  `notification_timestamp` DATETIME NULL,
   `last_login` DATETIME NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT `fk_users_project`

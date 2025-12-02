@@ -1,10 +1,10 @@
 // src/components/EditableTable.js
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
   Paper, IconButton, Select, MenuItem, TextField, Button,
-  Typography 
+  Typography, Dialog, DialogTitle, DialogContent, DialogActions, Alert
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -13,6 +13,8 @@ import ToggleOnIcon from '@mui/icons-material/ToggleOn';
 import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
+import WarningIcon from '@mui/icons-material/Warning';
+import { api } from '../api/conductorApi';
 
 // Helper for time input with +/-
 const TimeInput = ({ value, onChange, format }) => {
@@ -63,11 +65,14 @@ return (
         error={!isFormatValid} 
         helperText={!isFormatValid && `הפורמט חייב להיות בדיוק ${format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}`} // Updated helper text
         style={{ width: format === 'mm:ss' ? 95 : 140 }}
+        sx={{
+          '& .MuiInputBase-input': { fontSize: '1rem' }
+        }}
         inputProps={{ 
             // Maximum length based on format (5 for mm:ss, 8 for hh:mm:ss)
             maxLength: format === 'mm:ss' ? 5 : 8, 
             pattern: currentRegex.source, // Browser validation hint
-            style: { textAlign: 'right' }
+            style: { textAlign: 'right', fontSize: '1rem' }
         }}
       />
     </div>
@@ -90,9 +95,17 @@ const EditableTable = ({
     currentClockSeconds,
     isClockRunning,
     onRowStatusChange,
-    onRunRowScript }) => {
+    onRunRowScript,
+    activeLogins = [],
+    projectId,
+    userName }) => {
   
   const [newRole, setNewRole] = useState('');
+  const [userInfoModal, setUserInfoModal] = useState({ open: false, row: null, phaseIndex: null, rowIndex: null });
+  const [lastProcessedNotificationTimestamp, setLastProcessedNotificationTimestamp] = useState(null);
+  const [noUserWarning, setNoUserWarning] = useState({ open: false, role: '' });
+  const rowRefs = useRef({});
+  const tableContainerRef = useRef(null);
   
   const handleChange = (phaseIndex, rowIndex, field, newValue) => {
     const newPhases = [...tableData];
@@ -184,6 +197,110 @@ const EditableTable = ({
     setPeriodicScripts(periodicScripts.filter(script => script.id !== scriptId));
   };
 
+  const handleResetAllStatuses = () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm('האם אתה בטוח שברצונך לאפס את כל הסטטוסים ל-N/A? פעולה זו לא ניתנת לביטול.');
+    if (!confirmed) {
+      return;
+    }
+    
+    const newPhases = tableData.map(phase => ({
+      ...phase,
+      rows: phase.rows.map(row => ({ ...row, status: 'N/A' }))
+    }));
+    setTableData(newPhases);
+    
+    // Update all rows via API
+    newPhases.forEach(phase => {
+      phase.rows.forEach(row => {
+        if (row.id && typeof onRowStatusChange === 'function') {
+          onRowStatusChange(row.id, 'N/A').catch(err => {
+            console.error('Failed to update row status', err);
+          });
+        }
+      });
+    });
+  };
+
+  const handleOpenUserInfoModal = async (row, phaseIndex, rowIndex) => {
+    if (isManager) {
+      // Check if there's an active user logged in for this role
+      const hasActiveUser = activeLogins.some(login => login.role === row.role);
+      
+      if (!hasActiveUser) {
+        // Show warning that no user is logged in for this role
+        setNoUserWarning({ open: true, role: row.role });
+        return;
+      }
+      
+      // Manager sends notification to the user with that role
+      try {
+        await api.createUserNotification(projectId, row.role, 'show_modal', {
+          rowId: row.id,
+          phaseIndex,
+          rowIndex,
+          role: row.role,
+          time: row.time,
+          description: row.description,
+          globalRowNumber: getGlobalRowNumber(phaseIndex, rowIndex)
+        });
+      } catch (error) {
+        console.error('Failed to send notification to user', error);
+      }
+    } else {
+      // Regular user opens modal locally
+      setUserInfoModal({ open: true, row, phaseIndex, rowIndex });
+    }
+  };
+
+  const handleCloseUserInfoModal = () => {
+    setUserInfoModal({ open: false, row: null, phaseIndex: null, rowIndex: null });
+  };
+
+  const handleJumpToRow = (targetPhaseIndex, targetRowIndex) => {
+    handleCloseUserInfoModal();
+    const rowId = tableData[targetPhaseIndex]?.rows[targetRowIndex]?.id;
+    if (rowId && rowRefs.current[rowId] && tableContainerRef.current) {
+      const rowElement = rowRefs.current[rowId];
+      const containerElement = tableContainerRef.current;
+      
+      // Calculate the position of the row relative to the container
+      const containerRect = containerElement.getBoundingClientRect();
+      const rowRect = rowElement.getBoundingClientRect();
+      
+      // Calculate scroll position to center the row in the container
+      const scrollTop = containerElement.scrollTop;
+      const rowOffsetTop = rowElement.offsetTop;
+      const containerHeight = containerElement.clientHeight;
+      const rowHeight = rowElement.offsetHeight;
+      
+      // Scroll to center the row in the visible area
+      const targetScrollTop = rowOffsetTop - (containerHeight / 2) + (rowHeight / 2);
+      
+      containerElement.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
+      
+      // Highlight the row with green blinking for 3 seconds
+      const originalBg = rowElement.style.backgroundColor;
+      let isHighlighted = true;
+      const blinkInterval = setInterval(() => {
+        if (isHighlighted) {
+          rowElement.style.backgroundColor = 'rgba(76, 175, 80, 0.6)'; // Green
+        } else {
+          rowElement.style.backgroundColor = originalBg;
+        }
+        isHighlighted = !isHighlighted;
+      }, 300); // Blink every 300ms
+      
+      setTimeout(() => {
+        clearInterval(blinkInterval);
+        rowElement.style.backgroundColor = originalBg;
+      }, 3000); // Stop after 3 seconds
+    }
+  };
+
   const parseTimeToSeconds = (timeStr) => {
     if (!timeStr || typeof timeStr !== 'string') return null;
     const parts = timeStr.split(':').map(Number);
@@ -191,11 +308,80 @@ const EditableTable = ({
     return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
   };
 
-  return (
-      <TableContainer component={Paper} style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0', direction: 'rtl' }}>
+  // Calculate total rows before current phase for continuous numbering
+  const getGlobalRowNumber = (phaseIndex, rowIndex) => {
+    let count = 0;
+    for (let i = 0; i < phaseIndex; i++) {
+      count += tableData[i]?.rows?.length || 0;
+    }
+    return count + rowIndex + 1;
+  };
+
+  // Process notification command (for non-manager users)
+  const processNotification = (command, notificationData) => {
+    if (!command || !notificationData) return;
+    
+    if (command === 'show_modal') {
+      // Find the row in tableData
+      const targetPhaseIndex = notificationData.phaseIndex;
+      const targetRowIndex = notificationData.rowIndex;
       
-        {/* Periodic Scripts Row */}
-        <div style={{ padding: '15px', borderBottom: '2px solid #444', backgroundColor: '#1e1e1e', direction: 'rtl' }}>
+      if (targetPhaseIndex !== undefined && targetRowIndex !== undefined) {
+        const phase = tableData[targetPhaseIndex];
+        if (phase && phase.rows[targetRowIndex]) {
+          const row = phase.rows[targetRowIndex];
+          setUserInfoModal({ 
+            open: true, 
+            row, 
+            phaseIndex: targetPhaseIndex, 
+            rowIndex: targetRowIndex 
+          });
+        }
+      }
+    }
+  };
+
+  // Poll for notifications (for non-manager users)
+  useEffect(() => {
+    if (!isManager && projectId && userRole && userName) {
+      const interval = setInterval(() => {
+        api.getUserNotification(projectId, userRole, userName)
+          .then(response => {
+            if (response.command && response.timestamp) {
+              if (response.timestamp !== lastProcessedNotificationTimestamp) {
+                processNotification(response.command, response.data);
+                setLastProcessedNotificationTimestamp(response.timestamp);
+                // Clear the notification after processing
+                api.clearUserNotification(projectId, userRole, userName).catch(() => {});
+              }
+            }
+          })
+          .catch(err => {
+            // Silently fail - polling is not critical
+          });
+      }, 500);
+
+      return () => clearInterval(interval);
+    }
+  }, [isManager, projectId, userRole, userName, lastProcessedNotificationTimestamp, tableData]);
+
+  return (
+      <TableContainer 
+        ref={tableContainerRef}
+        component={Paper} 
+        style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0', direction: 'rtl', position: 'relative' }}
+      >
+      
+        {/* Periodic Scripts Row - Sticky */}
+        <div style={{ 
+          padding: '15px', 
+          borderBottom: '2px solid #444', 
+          backgroundColor: '#1e1e1e', 
+          direction: 'rtl',
+          position: 'sticky',
+          top: 0,
+          zIndex: 10
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 15, flexWrap: 'wrap' }}>
             {periodicScripts.map((script) => (
               <div
@@ -342,7 +528,7 @@ const EditableTable = ({
       
         {/* Manager Controls Area */}
         {isEditing && (
-          <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc', direction: 'rtl' }}>
+          <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc', direction: 'rtl', flexWrap: 'wrap' }}>
           
             {/* Add New Role controls (existing) */}
             <Button variant="contained" onClick={handleAddNewRole} style={{ direction: 'rtl' }}>
@@ -355,20 +541,32 @@ const EditableTable = ({
               הוסף שלב חדש
             </Button>
 
+            {/* Reset All Statuses Button */}
+            {isManager && (
+              <Button 
+                variant="outlined" 
+                color="warning" 
+                onClick={handleResetAllStatuses}
+                style={{ direction: 'rtl' }}
+              >
+                אפס כל הסטטוסים ל-N/A
+              </Button>
+            )}
+
           </div>
         )}
 
-      <Table stickyHeader size="small">
+      <Table stickyHeader size="small" sx={{ '& .MuiTableCell-root': { fontSize: '1rem' }, '& .MuiTableHead-root': { position: 'sticky', top: 0, zIndex: 10 } }}>
         <TableHead>
           <TableRow>
-            <TableCell style={{ width: '5%', textAlign: 'center' }}>#</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right' }}>תפקיד</TableCell>
-            <TableCell style={{ width: '15%', textAlign: 'right' }}>זמן</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right' }}>משך</TableCell>
-            <TableCell style={{ width: '35%', textAlign: 'right' }}>תיאור</TableCell>
-            <TableCell style={{ width: '15%', textAlign: 'right' }}>סקריפט</TableCell>
-            <TableCell style={{ width: '10%', textAlign: 'right' }}>סטטוס</TableCell>
-            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center' }}>פעולות</TableCell>}
+            <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>#</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>תפקיד</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>זמן</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>משך</TableCell>
+            <TableCell style={{ width: '35%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>תיאור</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>סקריפט</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>סטטוס</TableCell>
+            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e' }}>פעולות</TableCell>}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -383,7 +581,11 @@ const EditableTable = ({
                   <TableCell colSpan={isEditing ? 8 : 7} style={{ 
                       fontWeight: 'bold', 
                       backgroundColor: '#1e1e1e',
-                      textAlign: 'right'
+                      textAlign: 'right',
+                      fontSize: '1.1rem',
+                      position: 'sticky',
+                      top: '53px',
+                      zIndex: 9
                   }}>
                     שלב {phase.phase}
                     {/* Phase Activation Toggle */}
@@ -457,41 +659,49 @@ const EditableTable = ({
                   }
 
                   if (shouldHighlightOverdue) {
-                    const overdueOverlay = 'rgba(255, 193, 7, 0.18)';
+                    const overdueOverlay = 'rgba(255, 235, 59, 0.4)'; // More highlighted yellow
                     styles = {
                       ...styles,
                       backgroundColor: styles.backgroundColor === 'transparent' ? overdueOverlay : styles.backgroundColor,
-                      boxShadow: `${styles.boxShadow ? `${styles.boxShadow}, ` : ''}0 0 10px rgba(255, 193, 7, 0.4)`,
-                      border: styles.border || '1px solid rgba(255, 193, 7, 0.7)',
+                      boxShadow: `${styles.boxShadow ? `${styles.boxShadow}, ` : ''}0 0 15px rgba(255, 235, 59, 0.7)`,
+                      border: styles.border || '2px solid rgba(255, 235, 59, 0.9)',
                     };
                   }
 
                   return styles;
                 };
                 
+                const globalRowNumber = getGlobalRowNumber(phaseIndex, rowIndex);
                 return ( // <-- Start of the inner return
-                <TableRow key={row.id} style={getRowStyles()}>
-                  {/* Row Number */}
-                  <TableCell align="center" style={{ fontWeight: 'bold' }}>
-                    {rowIndex + 1}
+                <TableRow 
+                  key={row.id} 
+                  style={getRowStyles()}
+                  ref={el => {
+                    if (el) rowRefs.current[row.id] = el;
+                  }}
+                >
+                  {/* Row Number - Global across all phases */}
+                  <TableCell align="center" style={{ fontWeight: 'bold', fontSize: '1rem' }}>
+                    {globalRowNumber}
                   </TableCell>
                   {/* Role */}
-                  <TableCell style={{ textAlign: 'right' }}>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                       <Select
                         value={row.role}
                         onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
                         size="small"
-                        style={{ width: '100%', direction: 'rtl' }}
+                        style={{ width: '100%', direction: 'rtl', fontSize: '1rem' }}
+                        sx={{ '& .MuiSelect-select': { fontSize: '1rem' } }}
                       >
-                        {allRoles.map(role => <MenuItem key={role} value={role}>{role}</MenuItem>)}
+                        {allRoles.map(role => <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>)}
                       </Select>
                     ) : (
                       row.role
                     )}
                   </TableCell>
                   
-                  <TableCell style={{ textAlign: 'right' }}>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                         <TimeInput 
                         value={row.time}
@@ -503,7 +713,7 @@ const EditableTable = ({
                     )}
                   </TableCell>
 
-                  <TableCell style={{ textAlign: 'right' }}>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                         <TimeInput 
                         value={row.duration}
@@ -516,7 +726,7 @@ const EditableTable = ({
                   </TableCell>
 
                   {/* Description (Free Text, Expands Row) */}
-                  <TableCell style={{ textAlign: 'right' }}>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                       <TextField
                         value={row.description}
@@ -524,17 +734,21 @@ const EditableTable = ({
                         size="small"
                         multiline
                         fullWidth
-                        sx={{ direction: 'rtl', '& textarea': { textAlign: 'right' } }}
+                        sx={{ 
+                          direction: 'rtl', 
+                          '& textarea': { textAlign: 'right', fontSize: '1rem' },
+                          '& .MuiInputBase-input': { fontSize: '1rem' }
+                        }}
                       />
                     ) : (
-                      <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right' }}>
+                      <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '1rem' }}>
                         {row.description}
                       </Typography>
                     )}
                   </TableCell>
                   
                   {/* Script Column */}
-                  <TableCell style={{ textAlign: 'right' }}>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                       <TextField
                         value={row.script || ''}
@@ -542,7 +756,11 @@ const EditableTable = ({
                         size="small"
                         placeholder="נתיב/נקודת קצה API"
                         fullWidth
-                        sx={{ direction: 'rtl', '& input': { textAlign: 'right' } }}
+                        sx={{ 
+                          direction: 'rtl', 
+                          '& input': { textAlign: 'right', fontSize: '1rem' },
+                          '& .MuiInputBase-input': { fontSize: '1rem' }
+                        }}
                       />
                     ) : (
                       row.script ? (
@@ -553,6 +771,7 @@ const EditableTable = ({
                             color="primary"
                             endIcon={<PlayArrowIcon />}
                             onClick={() => handleRunScript(phaseIndex, rowIndex)}
+                            sx={{ fontSize: '1rem' }}
                           >
                             הרץ סקריפט
                           </Button>
@@ -565,13 +784,13 @@ const EditableTable = ({
                           )}
                         </div>
                       ) : (
-                        <span style={{ color: '#666' }}>—</span>
+                        <span style={{ color: '#666', fontSize: '1rem' }}>—</span>
                       )
                     )}
                   </TableCell>
                   
-                  {/* Status (Pass/Fail/N/A) Column - V, X, and N/A buttons */}
-                  <TableCell style={{ textAlign: 'right' }}>
+                  {/* Status (Pass/Fail/N/A) Column - V, X, N/A buttons, and User Info for Manager */}
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', direction: 'rtl' }}>
                       <IconButton
                         onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
@@ -604,12 +823,23 @@ const EditableTable = ({
                       >
                         <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
                       </IconButton>
+                      {/* User Info Button for Manager (available always, not just in edit mode) */}
+                      {isManager && (
+                        <IconButton
+                          onClick={() => handleOpenUserInfoModal(row, phaseIndex, rowIndex)}
+                          size="small"
+                          color="warning"
+                          title="שלח התראה למשתמש"
+                        >
+                          <WarningIcon />
+                        </IconButton>
+                      )}
                     </div>
                   </TableCell>
                   
                   {/* Actions (Remove) */}
                   {isEditing && (
-                    <TableCell style={{ textAlign: 'center' }}>
+                    <TableCell style={{ textAlign: 'center', fontSize: '1rem' }}>
                       <IconButton onClick={() => handleRemoveRow(phaseIndex, rowIndex)} size="small" color="error">
                         <DeleteIcon />
                       </IconButton>
@@ -622,6 +852,73 @@ const EditableTable = ({
           )})}
         </TableBody>
       </Table>
+
+      {/* User Info Modal */}
+      <Dialog 
+        open={userInfoModal.open} 
+        onClose={handleCloseUserInfoModal}
+        maxWidth="sm"
+        fullWidth
+        dir="rtl"
+      >
+        <DialogTitle>
+          התראה: שורה #{getGlobalRowNumber(userInfoModal.phaseIndex || 0, userInfoModal.rowIndex || 0)}
+        </DialogTitle>
+        <DialogContent>
+          {userInfoModal.row && (
+            <div style={{ direction: 'rtl' }}>
+              <Typography variant="body1" style={{ marginBottom: 10 }}>
+                <strong>תפקיד:</strong> {userInfoModal.row.role}
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: 10 }}>
+                <strong>זמן:</strong> {userInfoModal.row.time}
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: 20 }}>
+                <strong>תיאור:</strong> {userInfoModal.row.description || 'אין תיאור'}
+              </Typography>
+              
+              <Button
+                variant="contained"
+                color="primary"
+                fullWidth
+                onClick={() => {
+                  // Jump to the row
+                  if (userInfoModal.phaseIndex !== null && userInfoModal.rowIndex !== null) {
+                    handleJumpToRow(userInfoModal.phaseIndex, userInfoModal.rowIndex);
+                  }
+                }}
+                style={{ marginTop: 10 }}
+              >
+                קפוץ לשורה
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+        <DialogActions style={{ direction: 'rtl' }}>
+          <Button onClick={handleCloseUserInfoModal}>סגור</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* No User Warning Dialog */}
+      <Dialog 
+        open={noUserWarning.open} 
+        onClose={() => setNoUserWarning({ open: false, role: '' })}
+        maxWidth="sm"
+        fullWidth
+        dir="rtl"
+      >
+        <DialogTitle>אזהרה</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" style={{ direction: 'rtl', marginBottom: 10 }}>
+            אין משתמש מחובר לתפקיד "{noUserWarning.role}" כרגע.
+            <br />
+            לא ניתן לשלוח התראה למשתמש שאינו מחובר.
+          </Alert>
+        </DialogContent>
+        <DialogActions style={{ direction: 'rtl' }}>
+          <Button onClick={() => setNoUserWarning({ open: false, role: '' })}>אישור</Button>
+        </DialogActions>
+      </Dialog>
     </TableContainer>
   );
 };
