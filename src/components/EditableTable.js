@@ -904,24 +904,26 @@ const EditableTable = ({
                       />
                     ) : (
                       row.script ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', direction: 'rtl' }}>
-                          <Button 
-                            variant="contained" 
-                            size="small"
-                            color="primary"
-                            endIcon={<PlayArrowIcon />}
-                            onClick={() => handleRunScript(phaseIndex, rowIndex)}
-                            sx={{ fontSize: '1rem' }}
-                          >
-                            הרץ סקריפט
-                          </Button>
-                          {row.scriptResult !== undefined && (
-                            row.scriptResult ? (
-                              <CheckIcon color="success" style={{ fontSize: 24 }} />
-                            ) : (
-                              <CloseIcon color="error" style={{ fontSize: 24 }} />
-                            )
-                          )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Button 
+                              variant="contained" 
+                              size="small"
+                              color="primary"
+                              endIcon={<PlayArrowIcon />}
+                              onClick={() => handleRunScript(phaseIndex, rowIndex)}
+                              sx={{ fontSize: '1rem' }}
+                            >
+                              הרץ סקריפט
+                            </Button>
+                            {row.scriptResult !== undefined && (
+                              row.scriptResult ? (
+                                <CheckIcon color="success" style={{ fontSize: 24 }} />
+                              ) : (
+                                <CloseIcon color="error" style={{ fontSize: 24 }} />
+                              )
+                            )}
+                          </div>
                         </div>
                       ) : (
                         <span style={{ color: '#666', fontSize: '1rem' }}>—</span>
@@ -931,49 +933,51 @@ const EditableTable = ({
                   
                   {/* Status (Pass/Fail/N/A) Column - V, X, N/A buttons, and User Info for Manager */}
                   <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', direction: 'rtl' }}>
-                      <IconButton
-                        onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
-                        size="small"
-                        disabled={!canChangeStatus}
-                        color={row.status === 'Passed' ? 'success' : 'default'}
-                        title="עבר"
-                      >
-                        <CheckIcon />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Failed')}
-                        size="small"
-                        disabled={!canChangeStatus}
-                        color={row.status === 'Failed' ? 'error' : 'default'}
-                        title="נכשל"
-                      >
-                        <CloseIcon />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'N/A')}
-                        size="small"
-                        disabled={!canChangeStatus}
-                        color={row.status === 'N/A' ? 'default' : 'default'}
-                        title="לא רלוונטי"
-                        sx={{
-                          border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
-                          borderRadius: '4px'
-                        }}
-                      >
-                        <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
-                      </IconButton>
-                      {/* User Info Button for Manager (available always, not just in edit mode) */}
-                      {isManager && (
+                    <div style={{ display: 'flex', width: '100%' }}>
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
                         <IconButton
-                          onClick={() => handleOpenUserInfoModal(row, phaseIndex, rowIndex)}
+                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
                           size="small"
-                          color="warning"
-                          title="שלח התראה למשתמש"
+                          disabled={!canChangeStatus}
+                          color={row.status === 'Passed' ? 'success' : 'default'}
+                          title="עבר"
                         >
-                          <WarningIcon />
+                          <CheckIcon />
                         </IconButton>
-                      )}
+                        <IconButton
+                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Failed')}
+                          size="small"
+                          disabled={!canChangeStatus}
+                          color={row.status === 'Failed' ? 'error' : 'default'}
+                          title="נכשל"
+                        >
+                          <CloseIcon />
+                        </IconButton>
+                        <IconButton
+                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'N/A')}
+                          size="small"
+                          disabled={!canChangeStatus}
+                          color={row.status === 'N/A' ? 'default' : 'default'}
+                          title="לא רלוונטי"
+                          sx={{
+                            border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
+                            borderRadius: '4px'
+                          }}
+                        >
+                          <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
+                        </IconButton>
+                        {/* User Info Button for Manager (available always, not just in edit mode) */}
+                        {isManager && (
+                          <IconButton
+                            onClick={() => handleOpenUserInfoModal(row, phaseIndex, rowIndex)}
+                            size="small"
+                            color="warning"
+                            title="שלח התראה למשתמש"
+                          >
+                            <WarningIcon />
+                          </IconButton>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   
