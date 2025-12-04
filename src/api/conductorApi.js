@@ -153,10 +153,10 @@ export const api = {
       method: 'POST',
       body: { reviewed_by: reviewedBy },
     }),
-  acceptPendingChangeRow: (projectId, changeId, rowId, action, rowData, phaseId = null) =>
+  acceptPendingChangeRow: (projectId, changeId, rowId, action, rowData, phaseId = null, reviewedBy = null) =>
     request(`/api/projects/${projectId}/pending-changes/${changeId}/accept-row`, {
       method: 'POST',
-      body: { row_id: rowId, action, row_data: rowData, phase_id: phaseId },
+      body: { row_id: rowId, action, row_data: rowData, phase_id: phaseId, reviewed_by: reviewedBy },
     }),
   declinePendingChange: (projectId, changeId, reviewedBy) =>
     request(`/api/projects/${projectId}/pending-changes/${changeId}/decline`, {

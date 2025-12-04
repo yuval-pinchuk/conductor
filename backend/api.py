@@ -724,12 +724,14 @@ def accept_pending_change_row(project_id, change_id):
     row_id = data.get('row_id')
     row_action = data.get('action')  # 'update', 'create', 'delete'
     row_data = data.get('row_data')
+    reviewed_by = data.get('reviewed_by', '').strip()
     
     if not row_id and row_action != 'create':
         return jsonify({'error': 'row_id is required for update/delete'}), 400
     
     try:
         changes_data = json.loads(pending_change.changes_data)
+        change_type = pending_change.change_type
         
         if row_action == 'update' and row_data:
             # Update the row directly
@@ -744,12 +746,32 @@ def accept_pending_change_row(project_id, change_id):
                 row.updated_at = datetime.utcnow()
                 db.session.commit()
                 
-                # Remove this row from pending changes
+                # Update the row in pending changes to match the current database state
+                # This prevents the frontend from thinking the row was deleted
                 if 'table_data' in changes_data:
                     for phase in changes_data['table_data']:
                         if 'rows' in phase:
-                            phase['rows'] = [r for r in phase['rows'] if r.get('id') != row_id]
+                            for r in phase['rows']:
+                                if r.get('id') == row_id:
+                                    # Update the row in changes_data to match what we just applied
+                                    r['role'] = row.role
+                                    r['time'] = row.time
+                                    r['duration'] = row.duration
+                                    r['description'] = row.description
+                                    r['script'] = row.script
+                                    r['status'] = row.status
+                                    if row.script_result is not None:
+                                        r['scriptResult'] = row.script_result
+                                    break
                     pending_change.changes_data = json.dumps(changes_data)
+                    db.session.commit()
+                
+                # Check if all changes are processed
+                if _are_all_changes_processed(changes_data, change_type):
+                    pending_change.status = 'accepted'
+                    if reviewed_by:
+                        pending_change.reviewed_by = reviewed_by
+                    pending_change.reviewed_at = datetime.utcnow()
                     db.session.commit()
                 
                 return jsonify({'message': 'Row change accepted'}), 200
@@ -789,6 +811,14 @@ def accept_pending_change_row(project_id, change_id):
                 pending_change.changes_data = json.dumps(changes_data)
                 db.session.commit()
             
+            # Check if all changes are processed
+            if _are_all_changes_processed(changes_data, change_type):
+                pending_change.status = 'accepted'
+                if reviewed_by:
+                    pending_change.reviewed_by = reviewed_by
+                pending_change.reviewed_at = datetime.utcnow()
+                db.session.commit()
+            
             return jsonify({'message': 'Row created'}), 200
             
         elif row_action == 'delete':
@@ -806,6 +836,14 @@ def accept_pending_change_row(project_id, change_id):
                     pending_change.changes_data = json.dumps(changes_data)
                     db.session.commit()
                 
+                # Check if all changes are processed
+                if _are_all_changes_processed(changes_data, change_type):
+                    pending_change.status = 'accepted'
+                    if reviewed_by:
+                        pending_change.reviewed_by = reviewed_by
+                    pending_change.reviewed_at = datetime.utcnow()
+                    db.session.commit()
+                
                 return jsonify({'message': 'Row deleted'}), 200
         
         return jsonify({'error': 'Invalid action or missing data'}), 400
@@ -813,6 +851,44 @@ def accept_pending_change_row(project_id, change_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+def _are_all_changes_processed(changes_data, change_type):
+    """Check if all changes in changes_data have been processed.
+    Since we can only process rows individually via this endpoint,
+    we check if all rows are processed. Other change types (version, scripts, roles)
+    would need to be processed via the general accept endpoint."""
+    # Check table_data changes - if change_type is 'table_data' or 'all'
+    if change_type in ('all', 'table_data'):
+        if 'table_data' in changes_data:
+            # Check if any phase has any rows remaining
+            for phase in changes_data['table_data']:
+                if 'rows' in phase and len(phase['rows']) > 0:
+                    return False
+    
+    # If change_type is 'table_data', we're done checking
+    if change_type == 'table_data':
+        return True
+    
+    # For 'all' change type, we can only mark as accepted if:
+    # 1. All rows are processed (checked above)
+    # 2. There are no other change types that need processing
+    # Since version/scripts/roles can't be processed individually,
+    # we only mark as accepted if they don't exist in changes_data
+    if change_type == 'all':
+        # Check if version exists and needs processing
+        if 'version' in changes_data and changes_data.get('version'):
+            return False
+        
+        # Check if periodic_scripts exist and need processing
+        if 'periodic_scripts' in changes_data and len(changes_data.get('periodic_scripts', [])) > 0:
+            return False
+        
+        # Check if roles exist and need processing
+        if 'roles' in changes_data and len(changes_data.get('roles', [])) > 0:
+            return False
+    
+    return True
 
 
 @api.route('/api/projects/<int:project_id>/pending-changes/<int:change_id>/accept', methods=['POST'])

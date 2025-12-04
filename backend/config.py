@@ -9,8 +9,8 @@ DEBUG = True
 DB_HOST = 'localhost'
 DB_PORT = 3306
 DB_USER = 'root'
-DB_PASSWORD = 'password'
-DB_NAME = 'conductor_db'
+DB_PASSWORD = '9Lper2as!'
+DB_NAME = 'conductor'
 
 # Construct MySQL connection string
 SQLALCHEMY_DATABASE_URI = f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'

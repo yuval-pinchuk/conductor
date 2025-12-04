@@ -819,6 +819,19 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                     return count + rowIndex + 1;
                   };
                   
+                  // Helper function to check if two rows are similar (same data fields, ignoring ID and status)
+                  const areRowsSimilar = (row1, row2) => {
+                    if (!row1 || !row2) return false;
+                    // Compare key data fields (excluding id, status, index, and other metadata)
+                    return (
+                      row1.role === row2.role &&
+                      row1.time === row2.time &&
+                      row1.duration === row2.duration &&
+                      row1.description === row2.description &&
+                      row1.script === row2.script
+                    );
+                  };
+                  
                   // Analyze table data changes
                   const getTableChanges = () => {
                     if (!changesData.table_data) return null;
@@ -868,9 +881,39 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                         
                         currentRows.forEach((currentRow, rowId) => {
                           if (!newRows.has(rowId)) {
-                            // Only mark as deleted if this row wasn't modified in the same change
-                            // (modified rows are updates, not deletions)
-                            if (!modifiedRowIds.has(rowId)) {
+                            // Check if this row was actually updated (not deleted)
+                            // After approval, currentTableData has the updated row with new values
+                            // We need to check if this row matches any row in modifiedRows.old (the old version)
+                            // If it does, it means this row was updated, not deleted
+                            let isActuallyUpdated = false;
+                            
+                            // First, check if this row matches any old row from modifiedRows
+                            // This means the row was updated (old version → new version)
+                            for (const modifiedRow of modifiedRows) {
+                              // Compare currentRow with the old row from modifiedRows
+                              // If they match, it means currentRow is the old version that was updated
+                              if (areRowsSimilar(currentRow, modifiedRow.old)) {
+                                isActuallyUpdated = true;
+                                break;
+                              }
+                            }
+                            
+                            // Also check if currentRow matches any new row in newRows (by data, not ID)
+                            // This handles cases where the row was updated and might have a different ID
+                            if (!isActuallyUpdated) {
+                              for (const [newRowId, newRow] of newRows) {
+                                if (areRowsSimilar(currentRow, newRow)) {
+                                  isActuallyUpdated = true;
+                                  break;
+                                }
+                              }
+                            }
+                            
+                            // Only mark as deleted if:
+                            // 1. It wasn't modified in the same change (by ID)
+                            // 2. It doesn't match any old row from modifiedRows (wasn't updated)
+                            // 3. It doesn't exist as a similar row in the new data
+                            if (!modifiedRowIds.has(rowId) && !isActuallyUpdated) {
                               deletedRows.push({ 
                                 ...currentRow, 
                                 phaseIndex: currentPhase.index,
@@ -1196,7 +1239,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                                                 script: addedRow.script,
                                                                 status: addedRow.status
                                                               },
-                                                              phaseData.id
+                                                              phaseData.id,
+                                                              name
                                                             );
                                                             await loadProjectData(false);
                                                             const updatedChanges = await api.getPendingChanges(project.id, 'pending');
@@ -1272,32 +1316,32 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                                 <Box sx={{ direction: 'rtl' }}>
                                                   {old.role !== newRow.role && (
                                                     <Typography variant="body2" sx={{ mb: 1 }}>
-                                                      <strong>תפקיד:</strong> <span style={{ color: '#ff6b6b' }}>{old.role}</span> → <span style={{ color: '#51cf66' }}>{newRow.role}</span>
+                                                      <strong>תפקיד:</strong> <span style={{ color: '#ff6b6b' }}>{old.role}</span> <span style={{ color: '#51cf66' }}>→</span> <span style={{ color: '#51cf66' }}>{newRow.role}</span>
                                                     </Typography>
                                                   )}
                                                   {old.time !== newRow.time && (
                                                     <Typography variant="body2" sx={{ mb: 1 }}>
-                                                      <strong>זמן:</strong> <span style={{ color: '#ff6b6b' }}>{old.time}</span> → <span style={{ color: '#51cf66' }}>{newRow.time}</span>
+                                                      <strong>זמן:</strong> <span style={{ color: '#ff6b6b' }}>{old.time}</span> <span style={{ color: '#51cf66' }}>→</span> <span style={{ color: '#51cf66' }}>{newRow.time}</span>
                                                     </Typography>
                                                   )}
                                                   {old.duration !== newRow.duration && (
                                                     <Typography variant="body2" sx={{ mb: 1 }}>
-                                                      <strong>משך:</strong> <span style={{ color: '#ff6b6b' }}>{old.duration}</span> → <span style={{ color: '#51cf66' }}>{newRow.duration}</span>
+                                                      <strong>משך:</strong> <span style={{ color: '#ff6b6b' }}>{old.duration}</span> <span style={{ color: '#51cf66' }}>→</span> <span style={{ color: '#51cf66' }}>{newRow.duration}</span>
                                                     </Typography>
                                                   )}
                                                   {old.description !== newRow.description && (
                                                     <Typography variant="body2" sx={{ mb: 1 }}>
-                                                      <strong>תיאור:</strong> <span style={{ color: '#ff6b6b' }}>{old.description || '(ריק)'}</span> → <span style={{ color: '#51cf66' }}>{newRow.description || '(ריק)'}</span>
+                                                      <strong>תיאור:</strong> <span style={{ color: '#ff6b6b' }}>{old.description || '(ריק)'}</span> <span style={{ color: '#51cf66' }}>→</span> <span style={{ color: '#51cf66' }}>{newRow.description || '(ריק)'}</span>
                                                     </Typography>
                                                   )}
                                                   {old.script !== newRow.script && (
                                                     <Typography variant="body2" sx={{ mb: 1 }}>
-                                                      <strong>סקריפט:</strong> <span style={{ color: '#ff6b6b' }}>{old.script || '(ריק)'}</span> → <span style={{ color: '#51cf66' }}>{newRow.script || '(ריק)'}</span>
+                                                      <strong>סקריפט:</strong> <span style={{ color: '#ff6b6b' }}>{old.script || '(ריק)'}</span> <span style={{ color: '#51cf66' }}>→</span> <span style={{ color: '#51cf66' }}>{newRow.script || '(ריק)'}</span>
                                                     </Typography>
                                                   )}
                                                   {old.status !== newRow.status && (
                                                     <Typography variant="body2" sx={{ mb: 1 }}>
-                                                      <strong>סטטוס:</strong> <span style={{ color: '#ff6b6b' }}>{old.status}</span> → <span style={{ color: '#51cf66' }}>{newRow.status}</span>
+                                                      <strong>סטטוס:</strong> <span style={{ color: '#ff6b6b' }}>{old.status}</span> <span style={{ color: '#51cf66' }}>→</span> <span style={{ color: '#51cf66' }}>{newRow.status}</span>
                                                     </Typography>
                                                   )}
                                                   <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
@@ -1344,7 +1388,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                                             change.id,
                                                             rowId,
                                                             'update',
-                                                            rowDataToSend
+                                                            rowDataToSend,
+                                                            null,
+                                                            name
                                                           );
                                                           await loadProjectData(false);
                                                           const updatedChanges = await api.getPendingChanges(project.id, 'pending');
@@ -1447,7 +1493,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                                             change.id,
                                                             deletedRow.id,
                                                             'delete',
-                                                            null
+                                                            null,
+                                                            null,
+                                                            name
                                                           );
                                                           await loadProjectData(false);
                                                           const updatedChanges = await api.getPendingChanges(project.id, 'pending');
