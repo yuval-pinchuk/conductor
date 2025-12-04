@@ -808,6 +808,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                   const versionChanged = changesData.version && changesData.version !== currentVersion;
                   const tableDataChanged = changesData.table_data && JSON.stringify(changesData.table_data) !== JSON.stringify(currentTableData);
                   const scriptsChanged = changesData.periodic_scripts && JSON.stringify(changesData.periodic_scripts) !== JSON.stringify(periodicScripts);
+                  const rolesChanged = changesData.roles && JSON.stringify([...changesData.roles].sort()) !== JSON.stringify([...allRoles].sort());
                   
                   // Helper to calculate global row number
                   const getGlobalRowNumber = (tableData, phaseIndex, rowIndex) => {
@@ -846,24 +847,36 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                           const currentRow = currentRows.get(rowId);
                           if (!currentRow) {
                             addedRows.push({ ...newRow, phaseIndex: newPhase.index });
-                          } else if (JSON.stringify(newRow) !== JSON.stringify(currentRow)) {
-                            modifiedRows.push({ 
-                              old: currentRow, 
-                              new: newRow,
-                              phaseIndex: currentPhase.index,
-                              oldRowIndex: currentRow.index,
-                              newRowIndex: newRow.index
-                            });
+                          } else {
+                            // Compare only data fields, excluding index to avoid false positives from index shifts
+                            const { index: _, ...newRowData } = newRow;
+                            const { index: __, ...currentRowData } = currentRow;
+                            if (JSON.stringify(newRowData) !== JSON.stringify(currentRowData)) {
+                              modifiedRows.push({ 
+                                old: currentRow, 
+                                new: newRow,
+                                phaseIndex: currentPhase.index,
+                                oldRowIndex: currentRow.index,
+                                newRowIndex: newRow.index
+                              });
+                            }
                           }
                         });
                         
+                        // Track which row IDs were modified to avoid false deletion detection
+                        const modifiedRowIds = new Set(modifiedRows.map(mr => mr.old.id));
+                        
                         currentRows.forEach((currentRow, rowId) => {
                           if (!newRows.has(rowId)) {
-                            deletedRows.push({ 
-                              ...currentRow, 
-                              phaseIndex: currentPhase.index,
-                              rowIndex: currentRow.index
-                            });
+                            // Only mark as deleted if this row wasn't modified in the same change
+                            // (modified rows are updates, not deletions)
+                            if (!modifiedRowIds.has(rowId)) {
+                              deletedRows.push({ 
+                                ...currentRow, 
+                                phaseIndex: currentPhase.index,
+                                rowIndex: currentRow.index
+                              });
+                            }
                           }
                         });
                         
@@ -918,8 +931,22 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                     return { added, modified, deleted };
                   };
                   
+                  // Analyze roles changes
+                  const getRolesChanges = () => {
+                    if (!changesData.roles) return null;
+                    
+                    const currentRolesSet = new Set(allRoles);
+                    const newRolesSet = new Set(changesData.roles);
+                    
+                    const added = changesData.roles.filter(role => !currentRolesSet.has(role));
+                    const deleted = allRoles.filter(role => !newRolesSet.has(role));
+                    
+                    return { added, deleted };
+                  };
+                  
                   const tableChanges = getTableChanges();
                   const scriptsChanges = getScriptsChanges();
+                  const rolesChanges = getRolesChanges();
                   
                   return (
                     <Box key={change.id} sx={{ mb: 3, p: 2, border: '1px solid #ccc', borderRadius: 1, direction: 'rtl' }}>
@@ -961,6 +988,69 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                               <Typography>→</Typography>
                               <Typography><strong>חדש:</strong> <span style={{ color: '#51cf66' }}>{changesData.version}</span></Typography>
                             </Box>
+                          </AccordionDetails>
+                        </Accordion>
+                      )}
+                      
+                      {/* Roles Changes */}
+                      {rolesChanged && rolesChanges && (
+                        <Accordion sx={{ 
+                          mb: 1,
+                          bgcolor: '#2d2d2d',
+                          color: 'white',
+                          '&:before': { display: 'none' },
+                          '& .MuiAccordionSummary-root': {
+                            bgcolor: '#1e1e1e',
+                            minHeight: '48px',
+                            '&:hover': { bgcolor: '#333' }
+                          },
+                          '& .MuiAccordionDetails-root': {
+                            bgcolor: '#2d2d2d',
+                            color: 'white'
+                          }
+                        }}>
+                          <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <EditIcon sx={{ color: '#2196f3' }} />
+                              <Typography><strong>שינויים בתפקידים</strong></Typography>
+                              {rolesChanges.added.length > 0 && (
+                                <Chip label={`+${rolesChanges.added.length} תפקידים`} color="success" size="small" sx={{ bgcolor: '#4caf50', color: 'white' }} />
+                              )}
+                              {rolesChanges.deleted.length > 0 && (
+                                <Chip label={`-${rolesChanges.deleted.length} תפקידים`} color="error" size="small" sx={{ bgcolor: '#f44336', color: 'white' }} />
+                              )}
+                            </Box>
+                          </AccordionSummary>
+                          <AccordionDetails>
+                            {/* Added Roles */}
+                            {rolesChanges.added.length > 0 && (
+                              <Box sx={{ mb: 2 }}>
+                                <Typography variant="subtitle2" sx={{ color: '#51cf66' }} gutterBottom>
+                                  <AddCircleIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  תפקידים שנוספו:
+                                </Typography>
+                                {rolesChanges.added.map((role, idx) => (
+                                  <Box key={idx} sx={{ ml: 2, mb: 0.5 }}>
+                                    <Typography><strong>{role}</strong></Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                            
+                            {/* Deleted Roles */}
+                            {rolesChanges.deleted.length > 0 && (
+                              <Box>
+                                <Typography variant="subtitle2" sx={{ color: '#f44336' }} gutterBottom>
+                                  <RemoveCircleIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                                  תפקידים שנמחקו:
+                                </Typography>
+                                {rolesChanges.deleted.map((role, idx) => (
+                                  <Box key={idx} sx={{ ml: 2, mb: 0.5 }}>
+                                    <Typography><strong>{role}</strong></Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
                           </AccordionDetails>
                         </Accordion>
                       )}
@@ -1151,6 +1241,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                           שורות ששונו ({modifiedRows.length}):
                                         </Typography>
                                         {modifiedRows.map(({ old, new: newRow, phaseIndex, oldRowIndex }, idx) => {
+                                          // Calculate global row number for the modified row
+                                          const globalRowNumber = getGlobalRowNumber(currentTableData, phaseIndex, oldRowIndex);
+                                          
                                           return (
                                             <Accordion 
                                               key={idx} 
@@ -1172,7 +1265,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                             >
                                               <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: 'white' }} />}>
                                                 <Typography>
-                                                  <strong>שורה שונתה</strong> - שלב {phase}
+                                                  <strong>שורה שונתה #{globalRowNumber}</strong> - שלב {phase}
                                                 </Typography>
                                               </AccordionSummary>
                                               <AccordionDetails>
@@ -1215,19 +1308,43 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                                                       onClick={async () => {
                                                         // Accept row change - apply the new values
                                                         try {
+                                                          // Extract the row ID from old object, ensuring we get the actual database ID
+                                                          // The old object has index added, but id should be the original row's id
+                                                          const rowId = old.id;
+                                                          
+                                                          if (!rowId) {
+                                                            console.error('Cannot update row: row ID is missing', { old, newRow });
+                                                            setDataError('Cannot update row: row ID is missing');
+                                                            return;
+                                                          }
+                                                          
+                                                          // Extract row data without index and other metadata properties
+                                                          const { index: _, phaseIndex: __, oldRowIndex: ___, newRowIndex: ____, id: _____, ...cleanNewRowData } = newRow;
+                                                          
+                                                          // Ensure we only send the actual row data fields
+                                                          const rowDataToSend = {
+                                                            role: cleanNewRowData.role,
+                                                            time: cleanNewRowData.time,
+                                                            duration: cleanNewRowData.duration,
+                                                            description: cleanNewRowData.description || '',
+                                                            script: cleanNewRowData.script || '',
+                                                            status: cleanNewRowData.status || 'N/A'
+                                                          };
+                                                          
+                                                          console.log('Updating row:', { 
+                                                            projectId: project.id, 
+                                                            changeId: change.id, 
+                                                            rowId, 
+                                                            action: 'update', 
+                                                            rowData: rowDataToSend 
+                                                          });
+                                                          
                                                           await api.acceptPendingChangeRow(
                                                             project.id,
                                                             change.id,
-                                                            old.id,
+                                                            rowId,
                                                             'update',
-                                                            {
-                                                              role: newRow.role,
-                                                              time: newRow.time,
-                                                              duration: newRow.duration,
-                                                              description: newRow.description,
-                                                              script: newRow.script,
-                                                              status: newRow.status
-                                                            }
+                                                            rowDataToSend
                                                           );
                                                           await loadProjectData(false);
                                                           const updatedChanges = await api.getPendingChanges(project.id, 'pending');
