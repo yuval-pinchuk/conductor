@@ -541,7 +541,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           periodicScripts={periodicScripts}
           setPeriodicScripts={setPeriodicScripts}
           currentClockSeconds={totalSeconds}
-          isClockRunning={timer.isRunning}
+          isClockRunning={timer.isRunning || isUsingTargetTime}
           onRowStatusChange={handleRowStatusChange}
           onRunRowScript={handleRunRowScript}
           activeLogins={activeLogins}

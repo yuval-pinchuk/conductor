@@ -801,10 +801,17 @@ const EditableTable = ({
                 
                 const rowTimeSeconds = parseTimeToSeconds(row.time);
                 const isStatusUnset = !row.status || row.status === 'N/A';
+                // When using target time countdown:
+                // - currentClockSeconds is negative when counting down (e.g., -3600 = 1 hour until target)
+                // - currentClockSeconds is positive when counting up past target (e.g., +3600 = 1 hour past target)
+                // - Row times are positive (e.g., "+01:30:00" = 5400 seconds from target)
+                // For highlighting: we want to highlight when the clock has reached or passed the row time
+                // During countdown (negative): we haven't reached any positive row times yet, so don't highlight
+                // After target (positive): compare normally - if currentClockSeconds >= rowTimeSeconds, highlight
                 const hasClockPassedRowTime = Boolean(
                   isClockRunning &&
-                  currentClockSeconds >= 0 &&
                   rowTimeSeconds !== null &&
+                  currentClockSeconds >= 0 && // Only check when at or past target (not counting down)
                   currentClockSeconds >= rowTimeSeconds
                 );
                 const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
