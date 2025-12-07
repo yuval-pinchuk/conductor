@@ -278,6 +278,48 @@ def create_app():
             import traceback
             traceback.print_exc()
     
+    # Chat handlers
+    @socketio.on('join_chat_room')
+    def handle_join_chat_room(data):
+        """Join a room for project chat"""
+        project_id = data.get('project_id')
+        if project_id:
+            room = f'chat_{project_id}'
+            join_room(room)
+            print(f'Client joined chat room: {room}')
+    
+    @socketio.on('sendMessage')
+    def handle_send_message(data):
+        """Handle chat message and broadcast to room"""
+        try:
+            project_id = data.get('projectId') or data.get('project_id')
+            user_id = data.get('userId') or data.get('user_id')
+            user_role = data.get('userRole') or data.get('user_role') or data.get('role')
+            message = data.get('message')
+            
+            if not project_id or not user_id or not message:
+                return
+            
+            # Create message object with timestamp
+            message_data = {
+                'user': user_id,
+                'userId': user_id,
+                'userName': user_id,  # User's name/ID
+                'userRole': user_role,
+                'role': user_role,  # Include both for backward compatibility
+                'message': message,
+                'timestamp': datetime.utcnow().isoformat() + 'Z'
+            }
+            
+            # Broadcast to all clients in the project's chat room
+            room = f'chat_{project_id}'
+            emit('receiveMessage', message_data, room=room)
+            print(f'Message broadcast to room {room}: {user_id}: {message}')
+        except Exception as e:
+            print(f'Error in handle_send_message: {e}')
+            import traceback
+            traceback.print_exc()
+    
     # Create tables
     with app.app_context():
         db.create_all()

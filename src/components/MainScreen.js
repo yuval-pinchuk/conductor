@@ -1,10 +1,12 @@
 // src/components/MainScreen.js
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
-import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box } from '@mui/material';
+import ProjectChat from './ProjectChat';
+import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, IconButton } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import { api } from '../api/conductorApi';
 
 const useInterval = (callback, delay) => {
@@ -87,6 +89,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Target time state for countdown mode
   const [targetDateTime, setTargetDateTime] = useState('');
   const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
+  
+  // Chat state
+  const [chatOpen, setChatOpen] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const lastReadMessageIndexRef = useRef(-1);
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -519,6 +526,16 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         targetDateTime={targetDateTime}
         isUsingTargetTime={isUsingTargetTime}
         isSaving={isSaving}
+        unreadMessageCount={unreadMessageCount}
+        onChatOpen={() => {
+          setChatOpen(true);
+          // Mark all messages as read when opening chat
+          setUnreadMessageCount(0);
+          lastReadMessageIndexRef.current = -1; // Will be updated by ProjectChat
+        }}
+        onChatClose={() => {
+          setChatOpen(false);
+        }}
       />
       
       {dataError && (
@@ -852,6 +869,62 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             </Button>
           </DialogActions>
         </Dialog>
+      )}
+      
+      {/* Chat Dialog - rendered here to have access to project and user info */}
+      {chatOpen && project && (
+        <div style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: '500px',
+          maxWidth: '90vw',
+          height: '600px',
+          maxHeight: '80vh',
+          zIndex: 1300,
+          backgroundColor: '#1e1e1e',
+          border: '1px solid #444',
+          borderRadius: '8px',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          <div style={{
+            padding: '12px 16px',
+            backgroundColor: '#2d2d2d',
+            borderBottom: '1px solid #444',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderRadius: '8px 8px 0 0'
+          }}>
+            <h3 style={{ margin: 0, color: '#fff', fontSize: '16px' }}>{project?.name || 'Project'} Chat</h3>
+            <IconButton 
+              size="small" 
+              onClick={() => setChatOpen(false)}
+              style={{ color: '#fff' }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </div>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <ProjectChat
+              projectId={project.id}
+              userId={name}
+              userRole={role}
+              onNewMessage={(messageIndex) => {
+                // Only increment unread count if chat is closed
+                if (!chatOpen) {
+                  setUnreadMessageCount(prev => prev + 1);
+                } else {
+                  // Chat is open, mark as read
+                  lastReadMessageIndexRef.current = messageIndex;
+                }
+              }}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
