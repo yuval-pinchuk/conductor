@@ -4,11 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
-import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, Accordion, AccordionSummary, AccordionDetails, Divider, Chip } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import AddCircleIcon from '@mui/icons-material/AddCircle';
-import RemoveCircleIcon from '@mui/icons-material/RemoveCircle';
-import EditIcon from '@mui/icons-material/Edit';
+import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box } from '@mui/material';
 import { api } from '../api/conductorApi';
 
 const useInterval = (callback, delay) => {
@@ -64,7 +60,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Pending Changes State
   const [pendingChanges, setPendingChanges] = useState([]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [selectedPendingChange, setSelectedPendingChange] = useState(null);
 
   // Loading states
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -76,12 +71,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [totalSeconds, setTotalSeconds] = useState(0);
   
   // Memoize the callback to prevent infinite loops
-  // Always update - don't check if value changed (React will optimize)
   const handleTimeUpdate = useCallback((seconds) => {
-    console.log('handleTimeUpdate called with:', seconds);
-    // Always update - the value should be different every second
     setTotalSeconds(seconds);
-    console.log('Updated totalSeconds to:', seconds);
   }, []);
   
   const timer = useCollaborativeTimer({
@@ -93,12 +84,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Extract timer values
   const isRunning = timer.isRunning;
   
-  // Legacy clock state (kept for compatibility with existing code)
-  const [isCountDown, setIsCountDown] = useState(false);
+  // Target time state for countdown mode
   const [targetDateTime, setTargetDateTime] = useState('');
   const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
-  
-  // Note: Old clock command processing removed - now using Socket.IO via CollaborativeTimer
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -228,9 +216,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     loadProjectData();
   }, [loadProjectData]);
 
-  // Clock ticker removed - now handled by CollaborativeTimer component via Socket.IO
-  // The timer updates automatically based on server state
-
   // Poll for project data updates (when not editing)
   // This ensures users see changes made by managers or other users
   useInterval(() => {
@@ -257,7 +242,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         // Update roles
         const currentRoles = await api.getProjectRoles(project.id);
         const currentRoleNames = new Set(currentRoles.map(r => r.role_name));
-        const newRoleNames = new Set(allRoles);
         
         // Add new roles
         for (const roleName of allRoles) {
@@ -280,7 +264,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           roles: allRoles,
         }));
         setIsEditing(false);
-        console.log("Changes Saved. New Version:", currentVersion);
       } else {
         // Non-manager submits pending change
         // Note: We don't include roles here because roles are derived from rows
@@ -305,7 +288,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         setCurrentVersion(originalVersion);
         setIsEditing(false);
         alert('שינויים נשלחו לאישור המנהל');
-        console.log("Changes submitted for approval");
       }
     } catch (error) {
       console.error('Failed to save/submit changes', error);
@@ -339,7 +321,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setPeriodicScripts(originalPeriodicScripts);
     setCurrentVersion(originalVersion); 
     setIsEditing(false);
-    console.log("Changes Canceled. Reverted to original data and version.");
   };
 
   // Fetch pending changes (for managers)
@@ -366,7 +347,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       // Auto-close modal if all changes in the submission are processed
       if (response.all_processed) {
         setReviewModalOpen(false);
-        setSelectedPendingChange(null);
       }
     } catch (error) {
       console.error('Failed to accept pending change', error);
@@ -384,7 +364,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       // Auto-close modal if all changes in the submission are processed
       if (response.all_processed) {
         setReviewModalOpen(false);
-        setSelectedPendingChange(null);
       }
     } catch (error) {
       console.error('Failed to decline pending change', error);
@@ -433,13 +412,20 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   useEffect(() => {
     if (timer.targetDateTime !== undefined) {
       if (timer.targetDateTime) {
-        setTargetDateTime(timer.targetDateTime.toISOString().slice(0, 16)); // Convert to datetime-local format
+        // Convert UTC Date to local datetime-local format for input field
+        // Get local time components from the UTC date
+        const localDate = new Date(timer.targetDateTime);
+        const year = localDate.getFullYear();
+        const month = String(localDate.getMonth() + 1).padStart(2, '0');
+        const day = String(localDate.getDate()).padStart(2, '0');
+        const hours = String(localDate.getHours()).padStart(2, '0');
+        const minutes = String(localDate.getMinutes()).padStart(2, '0');
+        const datetimeLocal = `${year}-${month}-${day}T${hours}:${minutes}`;
+        setTargetDateTime(datetimeLocal);
         setIsUsingTargetTime(true);
-        setIsCountDown(true);
       } else {
         setTargetDateTime('');
         setIsUsingTargetTime(false);
-        setIsCountDown(false);
       }
     }
   }, [timer.targetDateTime]);
@@ -468,8 +454,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       // Use Socket.IO to set the time
       if (timer.handleSetTime) {
         timer.handleSetTime(totalSecs);
-      } else {
-        console.error('Timer handleSetTime not available');
       }
     }
   };
@@ -479,17 +463,14 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       console.warn('Only managers can toggle the clock');
       return;
     }
-    console.log('handleToggleClock called, timer.isRunning:', timer.isRunning, 'timer.isConnected:', timer.isConnected);
     if (!timer.isConnected) {
       console.error('Timer socket not connected. Please wait for connection or check backend server.');
       alert('Timer not connected. Please ensure the backend server is running and try again.');
       return;
     }
     if (timer.isRunning) {
-      console.log('Calling timer.handleStop()');
       timer.handleStop();
     } else {
-      console.log('Calling timer.handleStart()');
       timer.handleStart();
     }
   };
@@ -500,7 +481,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       timer.handleSetTarget(targetTime);
       setTargetDateTime(targetTime);
       setIsUsingTargetTime(true);
-      setIsCountDown(true);
     } else {
       console.error('Timer handleSetTarget not available');
     }
@@ -512,7 +492,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       timer.handleClearTarget();
       setTargetDateTime('');
       setIsUsingTargetTime(false);
-      setIsCountDown(false);
     } else {
       console.error('Timer handleClearTarget not available');
     }
@@ -631,7 +610,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           open={reviewModalOpen} 
           onClose={() => {
             setReviewModalOpen(false);
-            setSelectedPendingChange(null);
           }}
           maxWidth="md"
           fullWidth
@@ -658,7 +636,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                     const firstChange = changes[0];
                     const totalChanges = changes.length;
                     const processedCount = changes.filter(c => c.status !== 'pending').length;
-                    const pendingCount = totalChanges - processedCount;
                   
                   return (
                       <Box key={submissionId} sx={{ mb: 4, p: 2, border: '1px solid #555', borderRadius: 1, bgcolor: '#1e1e1e' }}>
@@ -870,7 +847,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             </Typography>
             <Button onClick={() => {
               setReviewModalOpen(false);
-              setSelectedPendingChange(null);
             }}>
               סגור
             </Button>

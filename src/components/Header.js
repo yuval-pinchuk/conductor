@@ -124,7 +124,19 @@ const Header = ({
 
             {isUsingTargetTime && targetDateTime && (
               <Typography variant="caption" color="inherit">
-                Target: {new Date(targetDateTime).toLocaleString()}
+                Target: {(() => {
+                  // targetDateTime is in datetime-local format (YYYY-MM-DDTHH:mm)
+                  // Parse it as local time components (not UTC)
+                  if (targetDateTime.includes('T')) {
+                    const [datePart, timePart] = targetDateTime.split('T');
+                    const [year, month, day] = datePart.split('-').map(Number);
+                    const [hours, minutes] = timePart.split(':').map(Number);
+                    // Create Date object using local time components
+                    const localDate = new Date(year, month - 1, day, hours, minutes);
+                    return localDate.toLocaleString();
+                  }
+                  return new Date(targetDateTime).toLocaleString();
+                })()}
               </Typography>
             )}
 

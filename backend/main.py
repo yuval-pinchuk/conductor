@@ -6,7 +6,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS, SERVER_HOST, SERVER_PORT, DEBUG
 from module import db, Project
 from api import api
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Initialize SocketIO (will be initialized after app creation)
 # Use 'eventlet' or 'gevent' for better async support, fallback to 'threading'
@@ -183,12 +183,26 @@ def create_app():
                 if not project:
                     return
                 
-                # Parse the target datetime string (comes as ISO string from frontend)
+                # Parse the target datetime string
+                # Frontend now sends ISO string with timezone (e.g., "2024-01-15T14:00:00.000Z" or "2024-01-15T14:00:00+02:00")
                 try:
-                    target_datetime = datetime.fromisoformat(target_datetime_str.replace('Z', '+00:00'))
+                    # Parse ISO string with timezone
+                    if 'Z' in target_datetime_str:
+                        # UTC timezone
+                        target_datetime = datetime.fromisoformat(target_datetime_str.replace('Z', '+00:00'))
+                    elif '+' in target_datetime_str or (target_datetime_str.count('-') > 2 and len(target_datetime_str) > 10 and target_datetime_str[-6] in ['+', '-']):
+                        # Has timezone offset (e.g., +02:00)
+                        target_datetime = datetime.fromisoformat(target_datetime_str)
+                    else:
+                        # No timezone info - parse as naive and assume UTC (shouldn't happen with new frontend code)
+                        target_datetime = datetime.fromisoformat(target_datetime_str)
                 except ValueError:
-                    # Try parsing without timezone
+                    # Fallback: try parsing without timezone
                     target_datetime = datetime.fromisoformat(target_datetime_str)
+                
+                # Convert to UTC (naive datetime) for storage
+                if target_datetime.tzinfo is not None:
+                    target_datetime = target_datetime.astimezone(timezone.utc).replace(tzinfo=None)
                 
                 project.timer_target_datetime = target_datetime
                 

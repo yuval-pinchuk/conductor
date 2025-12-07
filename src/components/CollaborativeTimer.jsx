@@ -79,7 +79,8 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
             : new Date(data.targetDateTime + 'Z');
           if (!isNaN(parsedTarget.getTime())) {
             const now = new Date();
-            initialElapsed = Math.floor((parsedTarget - now) / 1000);
+            const diffSeconds = Math.floor((parsedTarget - now) / 1000);
+            initialElapsed = -diffSeconds; // Invert sign: negative = countdown, positive = count up
           }
         }
         setSecondsElapsed(initialElapsed);
@@ -111,14 +112,12 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
-      console.log('Socket connected');
       setIsConnected(true);
       // Join the timer room for this project
       newSocket.emit('join_timer_room', { project_id: projectId });
     });
 
     newSocket.on('disconnect', () => {
-      console.log('Socket disconnected');
       setIsConnected(false);
     });
 
@@ -135,7 +134,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
 
     // Listen for timer state updates from server
     newSocket.on('timerStateUpdate', (data) => {
-      console.log('Timer state update received:', data);
       
       setInitialOffset(data.initialOffset || 0);
       setIsRunning(data.isRunning);
@@ -151,7 +149,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
           timeString = timeString + 'Z';
         }
         
-        console.log('Parsing date string:', timeString, 'original:', data.lastStartTime);
         parsedStartTime = new Date(timeString);
         
         // Validate the parsed date
@@ -162,8 +159,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
             parsed: parsedStartTime
           });
           parsedStartTime = null;
-        } else {
-          console.log('Successfully parsed date:', parsedStartTime);
         }
       }
       setLastStartTime(parsedStartTime);
@@ -188,10 +183,11 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       // Calculate current elapsed time
       let currentElapsed = data.initialOffset || 0;
       
-      // If we have a target datetime, calculate countdown
+      // If we have a target datetime, calculate countdown/countup
       if (parsedTarget && !isNaN(parsedTarget.getTime())) {
         const now = new Date();
-        currentElapsed = Math.floor((parsedTarget - now) / 1000);
+        const diffSeconds = Math.floor((parsedTarget - now) / 1000);
+        currentElapsed = -diffSeconds; // Invert sign: negative = countdown, positive = count up
       } else if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
         // Use UTC time to avoid timezone issues
         const now = new Date();
@@ -244,7 +240,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
 
   // Local counting logic - runs when isRunning or lastStartTime changes
   useEffect(() => {
-    console.log('Timer effect running with:', { isRunning, lastStartTime, initialOffset });
     
     // If we have a target datetime, always run the interval (countdown mode)
     // Otherwise, check if timer is running
@@ -252,7 +247,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     const shouldRun = hasTarget || (isRunningRef.current && lastStartTimeRef.current);
     
     if (!shouldRun) {
-      console.log('Timer not ready - isRunning:', isRunningRef.current, 'lastStartTime:', lastStartTimeRef.current);
       if (!isRunningRef.current) {
         const validOffset = typeof initialOffsetRef.current === 'number' && !isNaN(initialOffsetRef.current) 
           ? initialOffsetRef.current 
@@ -265,18 +259,18 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       return;
     }
     
-    console.log('Setting up interval - timer is running');
 
     // Calculate elapsed time using refs (always up-to-date)
     const calculateElapsed = () => {
       const now = new Date();
       const currentTarget = targetDateTimeRef.current;
       
-      // If we have a target datetime, calculate countdown
+      // If we have a target datetime, calculate countdown/countup
       if (currentTarget && currentTarget instanceof Date && !isNaN(currentTarget.getTime())) {
+        // Calculate difference: positive = target in future, negative = target passed
         const diffSeconds = Math.floor((currentTarget - now) / 1000);
-        // If countdown reached zero or passed, return 0
-        return Math.max(0, diffSeconds);
+        // Invert sign for display: negative = countdown (target in future), positive = count up (target passed)
+        return -diffSeconds;
       }
       
       // Otherwise, calculate normal elapsed time
@@ -304,7 +298,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
 
     // Set initial value
     const initialElapsed = calculateElapsed();
-    console.log('Initial elapsed calculated:', initialElapsed, 'from offset:', initialOffsetRef.current, 'startTime:', lastStartTimeRef.current);
     setSecondsElapsed(initialElapsed);
     if (onTimeUpdateRef.current) {
       onTimeUpdateRef.current(initialElapsed);
@@ -313,24 +306,14 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     // Update every second
     const interval = setInterval(() => {
       const currentElapsed = calculateElapsed();
-      console.log('Interval - calculated elapsed:', currentElapsed, 'offset:', initialOffsetRef.current, 'startTime:', lastStartTimeRef.current, 'target:', targetDateTimeRef.current);
       // Always update state to trigger re-render
       setSecondsElapsed(currentElapsed);
       
-      // If countdown reached zero or passed, stop the timer
-      const currentTarget = targetDateTimeRef.current;
-      const currentSocket = socketRef.current;
-      if (currentTarget && currentTarget instanceof Date && !isNaN(currentTarget.getTime())) {
-        if (currentElapsed <= 0 && isRunningRef.current && currentSocket) {
-          console.log('Countdown reached zero, stopping timer');
-          currentSocket.emit('requestStop', { project_id: projectIdRef.current });
-        }
-      }
+      // Note: We allow the timer to count past the target time (negative values = count up)
       
       // Always notify parent component using ref to get latest callback
       const callback = onTimeUpdateRef.current;
       if (callback) {
-        console.log('Calling onTimeUpdate callback with:', currentElapsed);
         try {
           callback(currentElapsed);
         } catch (error) {
@@ -341,11 +324,9 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       }
     }, 1000);
 
-    console.log('Interval created, dependencies:', { isRunning, lastStartTime, initialOffset, targetDateTime });
 
     // Cleanup function
     return () => {
-      console.log('Clearing interval! Dependencies changed or component unmounting');
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -369,12 +350,10 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       });
       // Try to connect if not already connecting
       if (!socket.connecting) {
-        console.log('Attempting to reconnect socket...');
         socket.connect();
       }
       return;
     }
-    console.log('Emitting requestStart for project:', projectId);
     socket.emit('requestStart', { project_id: projectId });
   }, [socket, projectId, isManager, isConnected]);
 
@@ -396,12 +375,10 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       });
       // Try to connect if not already connecting
       if (!socket.connecting) {
-        console.log('Attempting to reconnect socket...');
         socket.connect();
       }
       return;
     }
-    console.log('Emitting requestStop for project:', projectId);
     socket.emit('requestStop', { project_id: projectId });
   }, [socket, projectId, isManager, isConnected]);
 
@@ -419,7 +396,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       console.error('Socket not connected. Cannot set timer time.');
       return;
     }
-    console.log('Emitting requestSetTime for project:', projectId, 'totalSeconds:', totalSeconds);
     socket.emit('requestSetTime', { project_id: projectId, total_seconds: totalSeconds });
   }, [socket, projectId, isManager, isConnected]);
 
@@ -437,8 +413,19 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       console.error('Socket not connected. Cannot set target time.');
       return;
     }
-    console.log('Emitting requestSetTarget for project:', projectId, 'targetDateTime:', targetDateTimeString);
-    socket.emit('requestSetTarget', { project_id: projectId, target_datetime: targetDateTimeString });
+    // Convert datetime-local format to ISO string with timezone
+    // datetime-local gives us "YYYY-MM-DDTHH:mm" in local time
+    // We need to create a Date object to get the proper timezone offset
+    let isoString = targetDateTimeString;
+    if (targetDateTimeString && !targetDateTimeString.includes('Z') && !targetDateTimeString.match(/[+-]\d{2}:\d{2}$/)) {
+      // No timezone info, create Date object to get local timezone
+      const localDate = new Date(targetDateTimeString);
+      if (!isNaN(localDate.getTime())) {
+        // Convert to ISO string (includes timezone offset)
+        isoString = localDate.toISOString();
+      }
+    }
+    socket.emit('requestSetTarget', { project_id: projectId, target_datetime: isoString });
   }, [socket, projectId, isManager, isConnected]);
 
   // Handle clear target time
@@ -455,7 +442,6 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       console.error('Socket not connected. Cannot clear target time.');
       return;
     }
-    console.log('Emitting requestClearTarget for project:', projectId);
     socket.emit('requestClearTarget', { project_id: projectId });
   }, [socket, projectId, isManager, isConnected]);
 
