@@ -3,8 +3,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
-import { INITIAL_TABLE_DATA, ALL_AVAILABLE_ROLES } from '../data';
-import { Button } from '@mui/material';
+import useCollaborativeTimer from './CollaborativeTimer';
+import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box } from '@mui/material';
+import { api } from '../api/conductorApi';
 
 const useInterval = (callback, delay) => {
   const savedCallback = React.useRef();
@@ -25,162 +26,293 @@ const useInterval = (callback, delay) => {
 const formatTime = (totalSeconds) => {
   const isNegative = totalSeconds < 0;
   const absSeconds = Math.abs(totalSeconds);
-  const hours = String(Math.floor(absSeconds / 3600)).padStart(2, '0');
-  const minutes = String(Math.floor((absSeconds % 3600) / 60)).padStart(2, '0');
-  const seconds = String(absSeconds % 60).padStart(2, '0');
+  const hours = Math.floor(absSeconds / 3600).toString().padStart(2, '0');
+  const minutes = Math.floor((absSeconds % 3600) / 60).toString().padStart(2, '0');
+  const seconds = (absSeconds % 60).toString().padStart(2, '0');
+
   return (isNegative ? '-' : '+') + hours + ':' + minutes + ':' + seconds;
 };
 
 const MainScreen = ({ project, role, name, onLogout }) => {
-  const isManager = role === 'Manager';
+  const isManager = role === project.manager_role;
+  const [projectDetails, setProjectDetails] = useState(project);
   
   // State for the project version
-  const [currentVersion, setCurrentVersion] = useState(project.version);
+  const [currentVersion, setCurrentVersion] = useState(project.version || 'v1.0');
   // Temporary state to hold the version during an edit session
   const [originalVersion, setOriginalVersion] = useState(project.version);
   
   const [isEditing, setIsEditing] = useState(false);
-  const [originalTableData, setOriginalTableData] = useState(INITIAL_TABLE_DATA);
-  const [currentTableData, setCurrentTableData] = useState(INITIAL_TABLE_DATA);
-  const [allRoles, setAllRoles] = useState(ALL_AVAILABLE_ROLES);
+  const [originalTableData, setOriginalTableData] = useState([]);
+  const [currentTableData, setCurrentTableData] = useState([]);
+  const [allRoles, setAllRoles] = useState([]);
   
   // Phase Activation State
   const [activePhases, setActivePhases] = useState({}); // Example: { 1: true, 2: false }
   
   // Periodic Scripts State
-  const [periodicScripts, setPeriodicScripts] = useState([
-    { id: 1, name: 'Health Check', path: '/scripts/health.js', status: true },
-    { id: 2, name: 'Backup', path: '/scripts/backup.js', status: false }
-  ]);
-  const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([
-    { id: 1, name: 'Health Check', path: '/scripts/health.js', status: true },
-    { id: 2, name: 'Backup', path: '/scripts/backup.js', status: false }
-  ]);
+  const [periodicScripts, setPeriodicScripts] = useState([]);
+  const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([]);
   
-  // Clock State Management
+  // Active Logins State
+  const [activeLogins, setActiveLogins] = useState([]);
+  
+  // Pending Changes State
+  const [pendingChanges, setPendingChanges] = useState([]);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+
+  // Loading states
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [dataError, setDataError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
+  
+  // Timer state - managed by CollaborativeTimer hook
   const [totalSeconds, setTotalSeconds] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const [isCountDown, setIsCountDown] = useState(false); // Tracks if initial count was negative
+  
+  // Memoize the callback to prevent infinite loops
+  const handleTimeUpdate = useCallback((seconds) => {
+    setTotalSeconds(seconds);
+  }, []);
+  
+  const timer = useCollaborativeTimer({
+    projectId: project.id,
+    isManager: isManager,
+    onTimeUpdate: handleTimeUpdate
+  });
+  
+  // Extract timer values
+  const isRunning = timer.isRunning;
+  
+  // Target time state for countdown mode
   const [targetDateTime, setTargetDateTime] = useState('');
   const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
-  
-  const handleTogglePhaseActivation = (phaseNumber) => {
-    if (!isManager) return;
-    setActivePhases(prev => ({
-      ...prev,
-      [phaseNumber]: !prev[phaseNumber] // Toggle the status
+
+  const patchRows = (data, rowId, updates) =>
+    data.map(phase => ({
+      ...phase,
+      rows: phase.rows.map(row =>
+        row.id === rowId ? { ...row, ...updates } : row
+      ),
     }));
-  };
 
-  const handleSetClockTime = (timeString) => {
-    setIsUsingTargetTime(false);
-    setTargetDateTime('');
-    // Expects input like "+hh:mm:ss" or "-hh:mm:ss"
-    const sign = timeString.startsWith('-') ? -1 : 1;
-    const parts = timeString.substring(1).split(':').map(Number);
-    const seconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
-    
-    setTotalSeconds(seconds * sign);
-    setIsCountDown(sign === -1);
-  };
-  
-  const handleSetTargetClockTime = (isoString) => {
-    if (!isoString) return;
-    const targetMs = new Date(isoString).getTime();
-    if (Number.isNaN(targetMs)) return;
-    setTargetDateTime(isoString);
-    setIsUsingTargetTime(true);
-    const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
-    setTotalSeconds(diffSeconds);
-    setIsCountDown(diffSeconds < 0);
-    setIsRunning(false);
-  };
-
-  const handleClearTargetClockTime = () => {
-    setTargetDateTime('');
-    setIsUsingTargetTime(false);
-  };
-  
-  const handleToggleClock = () => {
-    if (!isManager || isUsingTargetTime) return;
-    setIsRunning(prev => !prev);
-  };
-
-  // Clock Interval Hook
-  useInterval(() => {
-    if (isUsingTargetTime && targetDateTime) {
-      const targetMs = new Date(targetDateTime).getTime();
-      if (!Number.isNaN(targetMs)) {
-        const diffSeconds = Math.floor((Date.now() - targetMs) / 1000);
-        setTotalSeconds(diffSeconds);
-        setIsCountDown(diffSeconds < 0);
-      }
-      return;
+  const applyRowUpdates = (rowId, updates, { syncOriginal = true } = {}) => {
+    setCurrentTableData(prev => patchRows(prev, rowId, updates));
+    if (syncOriginal) {
+      setOriginalTableData(prev => patchRows(prev, rowId, updates));
     }
+  };
 
-    if (!isUsingTargetTime) {
-      setTotalSeconds(prevSeconds => {
-        let newSeconds = prevSeconds;
+  const handleRowStatusChange = async (rowId, status) => {
+    try {
+      await api.updateRow(rowId, { status });
+      await loadProjectData(false);
+    } catch (error) {
+      console.error('Failed to update row status', error);
+      setDataError(error.message || 'Failed to update row status');
+      await loadProjectData(false);
+      throw error;
+    }
+  };
+
+  const handleRunRowScript = async (rowId) => {
+    try {
+      const { result } = await api.runRowScript(rowId);
+      applyRowUpdates(rowId, { scriptResult: result });
+    } catch (error) {
+      console.error('Failed to run script', error);
+      setDataError(error.message || 'Failed to run script');
+      throw error;
+    }
+  };
+
+  const handleTogglePhaseActivation = async (phase) => {
+    if (!isManager) return;
+    try {
+      const updatedPhase = await api.togglePhaseActive(phase.id);
+      setActivePhases(prev => ({
+        ...prev,
+        [updatedPhase.phase]: !!updatedPhase.is_active
+      }));
+      const updater = (data) =>
+        data.map(p =>
+          p.id === updatedPhase.id ? { ...p, is_active: updatedPhase.is_active } : p
+        );
+      setCurrentTableData(updater);
+      setOriginalTableData(updater);
+    } catch (error) {
+      console.error('Failed to toggle phase activation', error);
+      setDataError(error.message || 'Failed to toggle phase activation');
+    }
+  };
+
+  // Load project data
+  const loadProjectData = useCallback(async (showLoading = true) => {
+    if (showLoading) {
+      setIsLoadingData(true);
+    }
+    setDataError('');
+    
+    try {
+      // Fetch project details
+      const projectData = await api.getProjectById(project.id);
+      setProjectDetails(projectData);
+      setCurrentVersion(projectData.version);
+      
+      // Fetch phases with rows
+      const phasesData = await api.getPhases(project.id);
+      const tableData = phasesData.map(phase => ({
+        id: phase.id,
+        phase: phase.phase,
+        is_active: phase.is_active,
+        rows: phase.rows.map(row => ({
+          id: row.id,
+          role: row.role,
+          time: row.time,
+          duration: row.duration,
+          description: row.description,
+          script: row.script,
+          status: row.status,
+          scriptResult: row.scriptResult
+        }))
+      }));
+      
+      setCurrentTableData(tableData);
+      setOriginalTableData(JSON.parse(JSON.stringify(tableData)));
+      
+      // Set active phases
+      const activePhasesMap = {};
+      phasesData.forEach(phase => {
+        activePhasesMap[phase.phase] = !!phase.is_active;
+      });
+      setActivePhases(activePhasesMap);
+      
+      // Fetch roles
+      const rolesData = await api.getProjectRoles(project.id);
+      const roles = rolesData.map(r => r.role_name);
+      setAllRoles(roles);
+      
+      // Fetch periodic scripts
+      const scriptsData = await api.getPeriodicScripts(project.id);
+      setPeriodicScripts(scriptsData);
+      setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsData)));
+      
+      // Fetch active logins
+      const loginsData = await api.getActiveLogins(project.id);
+      setActiveLogins(loginsData);
+      
+      // Clock state is now managed by CollaborativeTimer via Socket.IO
+      // No need to process clock commands here
+    } catch (error) {
+      console.error('Failed to load project data', error);
+      setDataError(error.message || 'Failed to load project data');
+    } finally {
+        setIsLoadingData(false);
+      }
+  }, [project.id]);
+
+  // Load data on mount
+  useEffect(() => {
+    loadProjectData();
+  }, [loadProjectData]);
+
+  // Poll for project data updates (when not editing)
+  // This ensures users see changes made by managers or other users
+  useInterval(() => {
+    if (!isEditing && !isLoadingData) {
+      loadProjectData(false).catch(err => {
+          // Silently fail - polling is not critical
+        });
+    }
+  }, 5000); // Poll every 5 seconds
+
+  const handleSave = async () => {
+    if (isSaving) return;
+    
+    setIsSaving(true);
+    setDataError('');
+    
+    try {
+      if (isManager) {
+        // Manager saves directly
+        await api.updateTableData(project.id, currentTableData);
+        await api.updatePeriodicScriptsBulk(project.id, periodicScripts);
+        await api.updateProjectVersion(project.id, currentVersion);
         
-        // If counting down (negative time), decrease until zero, then switch to count-up
-        if (isCountDown && newSeconds < 0) {
-          newSeconds += 1; // Count up towards zero
-        } 
-        // If counting up (positive time or countdown finished)
-        else {
-          if (newSeconds < 0) { // Should only hit this right at the switch point from negative to positive
-            newSeconds = 0;
+        // Update roles
+        const currentRoles = await api.getProjectRoles(project.id);
+        const currentRoleNames = new Set(currentRoles.map(r => r.role_name));
+        
+        // Add new roles
+        for (const roleName of allRoles) {
+          if (!currentRoleNames.has(roleName)) {
+            await api.addProjectRole(project.id, roleName);
           }
-          newSeconds += 1; // Count forward
         }
         
-        return newSeconds;
-      });
-    }
-  }, (isUsingTargetTime && targetDateTime) || isRunning ? 1000 : null);
-
-  // Periodic Script Execution Hook - runs every 5 seconds
-  useInterval(async () => {
-    if (periodicScripts.length > 0) {
-      const updatedScripts = await Promise.all(
-        periodicScripts.map(async (script) => {
-          if (script.path) {
-            // Simulate script execution - in real implementation, this would call an API
-            // Replace this with actual API call that returns boolean
-            const result = Math.random() > 0.5; // Simulated result
-            
-            console.log(`[PERIODIC SCRIPT] ${script.name} (${script.path}): ${result}`);
-            return { ...script, status: result };
-          }
-          return script;
-        })
-      );
-      setPeriodicScripts(updatedScripts);
-    }
-  }, 5000); // Run every 5 seconds
-
-  const handleToggleEdit = () => {
-    if (!isEditing && role === 'Manager') {
-      // Create a DEEP CLONE of the table data to prevent mutation
-      const clonedData = JSON.parse(JSON.stringify(currentTableData)); 
-      const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
-      
-      setOriginalTableData(clonedData);      // <-- Save the deep clone
-      setOriginalPeriodicScripts(clonedScripts);
-      setOriginalVersion(currentVersion); 
-      setIsEditing(true);
-    } else if (isEditing) {
-      handleCancel();
+        // Note: Role deletion would need a separate endpoint
+        
+        // Update local state
+        const clonedData = JSON.parse(JSON.stringify(currentTableData));
+        const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
+        setOriginalTableData(clonedData);
+        setOriginalPeriodicScripts(clonedScripts);
+        setOriginalVersion(currentVersion);
+        setProjectDetails(prev => ({
+          ...prev,
+          version: currentVersion,
+          roles: allRoles,
+        }));
+        setIsEditing(false);
+      } else {
+        // Non-manager submits pending change
+        // Note: We don't include roles here because roles are derived from rows
+        // and will be automatically updated when rows are added/modified/deleted
+        const changesData = {
+          version: currentVersion,
+          table_data: currentTableData,
+          periodic_scripts: periodicScripts,
+          // roles: allRoles, // Removed - roles are derived from rows, not independently managed
+        };
+        
+        await api.createPendingChange(
+          project.id,
+          name,
+          role,
+          changesData
+        );
+        
+        // Revert to original data after submission
+        setCurrentTableData(originalTableData);
+        setPeriodicScripts(originalPeriodicScripts);
+        setCurrentVersion(originalVersion);
+        setIsEditing(false);
+        alert('שינויים נשלחו לאישור המנהל');
+      }
+    } catch (error) {
+      console.error('Failed to save/submit changes', error);
+      setDataError(error.message || 'Failed to save/submit changes');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleSave = () => {
-    // 1. Update the official original state with the current state (still using a deep copy)
-    setOriginalTableData(JSON.parse(JSON.stringify(currentTableData))); 
-    setOriginalPeriodicScripts(JSON.parse(JSON.stringify(periodicScripts)));
-    setOriginalVersion(currentVersion); 
-    setIsEditing(false);
-    console.log("Changes Saved. New Version:", currentVersion);
+  const handleDeleteProject = async () => {
+    if (!isManager || isDeletingProject || !projectDetails) return;
+    const confirmDelete = window.confirm(`Delete project "${projectDetails.name}"? This cannot be undone.`);
+    if (!confirmDelete) return;
+
+    setIsDeletingProject(true);
+    setDataError('');
+    try {
+      await api.deleteProject(projectDetails.id);
+      onLogout();
+    } catch (error) {
+      console.error('Failed to delete project', error);
+      setDataError(error.message || 'Failed to delete project');
+    } finally {
+      setIsDeletingProject(false);
+    }
   };
 
   const handleCancel = () => {
@@ -189,21 +321,195 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     setPeriodicScripts(originalPeriodicScripts);
     setCurrentVersion(originalVersion); 
     setIsEditing(false);
-    console.log("Changes Canceled. Reverted to original data and version.");
+  };
+
+  // Fetch pending changes (for managers)
+  const fetchPendingChanges = useCallback(async () => {
+    if (!isManager) return;
+    try {
+      const changes = await api.getPendingChanges(project.id, 'pending');
+      setPendingChanges(changes);
+    } catch (error) {
+      console.error('Failed to fetch pending changes', error);
+    }
+  }, [isManager, project.id]);
+
+  // Handle accepting a pending change
+  const handleAcceptPendingChange = async (changeId) => {
+    try {
+      const response = await api.acceptPendingChange(project.id, changeId, name);
+      
+      // Refresh data from server (changes are already applied on backend)
+      await loadProjectData(false);
+      const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+      setPendingChanges(updatedChanges);
+      
+      // Auto-close modal if all changes in the submission are processed
+      if (response.all_processed) {
+        setReviewModalOpen(false);
+      }
+    } catch (error) {
+      console.error('Failed to accept pending change', error);
+      setDataError(error.message || 'Failed to accept pending change');
+    }
+  };
+
+  // Handle declining a pending change
+  const handleDeclinePendingChange = async (changeId) => {
+    try {
+      const response = await api.declinePendingChange(project.id, changeId, name);
+      const updatedChanges = await api.getPendingChanges(project.id, 'pending');
+      setPendingChanges(updatedChanges);
+      
+      // Auto-close modal if all changes in the submission are processed
+      if (response.all_processed) {
+        setReviewModalOpen(false);
+      }
+    } catch (error) {
+      console.error('Failed to decline pending change', error);
+      setDataError(error.message || 'Failed to decline pending change');
+    }
+  };
+
+  // Poll for notifications (pending changes for managers, data updates for all users)
+  useEffect(() => {
+    if (project.id && role && name) {
+      const interval = setInterval(() => {
+        api.getUserNotification(project.id, role, name)
+          .then(response => {
+            if (response.command === 'pending_changes' && response.data && isManager) {
+              // Open review modal and fetch pending changes
+              fetchPendingChanges();
+              setReviewModalOpen(true);
+              // Clear the notification
+              api.clearUserNotification(project.id, role, name).catch(() => {});
+            } else if (response.command === 'data_updated' && response.data && !isEditing) {
+              // Refresh project data when updates are made
+              loadProjectData(false).catch(() => {});
+              // Clear the notification
+              api.clearUserNotification(project.id, role, name).catch(() => {});
+            }
+          })
+          .catch(err => {
+            // Silently fail
+          });
+      }, 2000);
+
+      return () => clearInterval(interval);
+    }
+  }, [isManager, project.id, role, name, fetchPendingChanges, loadProjectData, isEditing]);
+
+  // Fetch pending changes on mount and periodically
+  useEffect(() => {
+    if (isManager) {
+      fetchPendingChanges();
+      const interval = setInterval(fetchPendingChanges, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isManager, fetchPendingChanges]);
+
+  // Sync targetDateTime from timer (must be before any conditional returns)
+  useEffect(() => {
+    if (timer.targetDateTime !== undefined) {
+      if (timer.targetDateTime) {
+        // Convert UTC Date to local datetime-local format for input field
+        // Get local time components from the UTC date
+        const localDate = new Date(timer.targetDateTime);
+        const year = localDate.getFullYear();
+        const month = String(localDate.getMonth() + 1).padStart(2, '0');
+        const day = String(localDate.getDate()).padStart(2, '0');
+        const hours = String(localDate.getHours()).padStart(2, '0');
+        const minutes = String(localDate.getMinutes()).padStart(2, '0');
+        const datetimeLocal = `${year}-${month}-${day}T${hours}:${minutes}`;
+        setTargetDateTime(datetimeLocal);
+        setIsUsingTargetTime(true);
+      } else {
+        setTargetDateTime('');
+        setIsUsingTargetTime(false);
+      }
+    }
+  }, [timer.targetDateTime]);
+
+  if (isLoadingData) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  // Clock handlers - use CollaborativeTimer
+  // Use totalSeconds directly since it's updated via onTimeUpdate callback
+  const clockTime = formatTime(totalSeconds);
+  const handleSetClockTime = async (timeString) => {
+    if (!isManager) return;
+    // Parse time string (+/-hh:mm:ss) to seconds
+    const match = timeString.match(/^([+-])(\d{2}):(\d{2}):(\d{2})$/);
+    if (match) {
+      const sign = match[1] === '-' ? -1 : 1;
+      const hours = parseInt(match[2], 10);
+      const minutes = parseInt(match[3], 10);
+      const seconds = parseInt(match[4], 10);
+      const totalSecs = sign * (hours * 3600 + minutes * 60 + seconds);
+      // Use Socket.IO to set the time
+      if (timer.handleSetTime) {
+        timer.handleSetTime(totalSecs);
+      }
+    }
+  };
+
+  const handleToggleClock = () => {
+    if (!isManager) {
+      console.warn('Only managers can toggle the clock');
+      return;
+    }
+    if (!timer.isConnected) {
+      console.error('Timer socket not connected. Please wait for connection or check backend server.');
+      alert('Timer not connected. Please ensure the backend server is running and try again.');
+      return;
+    }
+    if (timer.isRunning) {
+      timer.handleStop();
+    } else {
+      timer.handleStart();
+    }
+  };
+
+  const handleSetTargetClockTime = async (targetTime) => {
+    if (!isManager) return;
+    if (timer.handleSetTarget) {
+      timer.handleSetTarget(targetTime);
+      setTargetDateTime(targetTime);
+      setIsUsingTargetTime(true);
+    } else {
+      console.error('Timer handleSetTarget not available');
+    }
+  };
+
+  const handleClearTargetClockTime = async () => {
+    if (!isManager) return;
+    if (timer.handleClearTarget) {
+      timer.handleClearTarget();
+      setTargetDateTime('');
+      setIsUsingTargetTime(false);
+    } else {
+      console.error('Timer handleClearTarget not available');
+    }
   };
 
   return (
-    <div>
+    <div style={{ minHeight: '100vh', backgroundColor: '#121212' }}>
       <Header
-        project={project}
+        project={projectDetails}
         role={role}
         name={name}
         isEditing={isEditing}
         currentVersion={currentVersion}
         setCurrentVersion={setCurrentVersion}
-        
-        // Clock Props (NEW)
-        clockTime={formatTime(totalSeconds)}
+        onToggleEdit={() => setIsEditing(true)}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        clockTime={clockTime}
         isRunning={isRunning}
         isManager={isManager}
         handleSetClockTime={handleSetClockTime}
@@ -212,17 +518,16 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         handleClearTargetClockTime={handleClearTargetClockTime}
         targetDateTime={targetDateTime}
         isUsingTargetTime={isUsingTargetTime}
-        
-        onToggleEdit={handleToggleEdit}
-        onSave={handleSave}
-        onCancel={handleCancel}
+        isSaving={isSaving}
       />
       
-      <div style={{ padding: 20 }}>
-        {role !== 'Manager' && isEditing && (
-          <p style={{ color: 'red' }}>Note: Only Managers can enter Edit Mode.</p>
-        )}
-        
+      {dataError && (
+        <Alert severity="error" onClose={() => setDataError('')} sx={{ m: 2 }}>
+          {dataError}
+        </Alert>
+      )}
+
+      <Box sx={{ p: 2 }}>
         <EditableTable
           tableData={currentTableData}
           setTableData={setCurrentTableData}
@@ -236,13 +541,318 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           periodicScripts={periodicScripts}
           setPeriodicScripts={setPeriodicScripts}
           currentClockSeconds={totalSeconds}
-          isClockRunning={isRunning || (isUsingTargetTime && !!targetDateTime)}
+          isClockRunning={timer.isRunning || isUsingTargetTime}
+          onRowStatusChange={handleRowStatusChange}
+          onRunRowScript={handleRunRowScript}
+          activeLogins={activeLogins}
+          projectId={project.id}
+          userName={name}
         />
         
-        <Button onClick={onLogout} variant="outlined" style={{ marginTop: 20 }}>
-          Logout
-        </Button>
-      </div>
+        <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>
+          <Button
+            variant="outlined"
+            color="secondary"
+            onClick={() => onLogout(project.id, name, role)}
+          >
+            התנתק
+          </Button>
+          
+          <Box sx={{ display: 'flex', gap: 2, direction: 'rtl' }}>
+          {isManager && (
+            <Button
+              variant="contained"
+              color="error"
+                onClick={handleDeleteProject}
+              disabled={isDeletingProject}
+            >
+              {isDeletingProject ? 'Deleting...' : 'Delete Project'}
+            </Button>
+          )}
+            
+            {isEditing && (
+              <>
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                >
+                  {isSaving ? 'שומר...' : isManager ? 'שמירה' : 'שליחה לאישור'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={handleCancel}
+                >
+                  ביטול
+                </Button>
+              </>
+            )}
+          </Box>
+        </Box>
+
+        {isManager && pendingChanges.length > 0 && (
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => setReviewModalOpen(true)}
+            sx={{ mt: 2 }}
+          >
+            {pendingChanges.length} בקשות ממתינות
+          </Button>
+        )}
+      </Box>
+
+      {/* Pending Changes Review Modal (Manager only) */}
+      {isManager && (
+        <Dialog 
+          open={reviewModalOpen} 
+          onClose={() => {
+            setReviewModalOpen(false);
+          }}
+          maxWidth="md"
+          fullWidth
+          dir="rtl"
+        >
+          <DialogTitle>בקשות שינויים ממתינות לאישור</DialogTitle>
+          <DialogContent>
+            {pendingChanges.length === 0 ? (
+              <Typography>אין בקשות שינויים ממתינות</Typography>
+            ) : (
+              <Box>
+                {(() => {
+                  // Group changes by submission_id
+                  const groupedBySubmission = {};
+                  pendingChanges.forEach(change => {
+                    const submissionId = change.submission_id;
+                    if (!groupedBySubmission[submissionId]) {
+                      groupedBySubmission[submissionId] = [];
+                    }
+                    groupedBySubmission[submissionId].push(change);
+                  });
+                  
+                  return Object.entries(groupedBySubmission).map(([submissionId, changes]) => {
+                    const firstChange = changes[0];
+                    const totalChanges = changes.length;
+                    const processedCount = changes.filter(c => c.status !== 'pending').length;
+                  
+                  return (
+                      <Box key={submissionId} sx={{ mb: 4, p: 2, border: '1px solid #555', borderRadius: 1, bgcolor: '#1e1e1e' }}>
+                        <Box sx={{ mb: 2, pb: 2, borderBottom: '1px solid #555' }}>
+                      <Typography variant="h6" gutterBottom>
+                            בקשה מ-{firstChange.submitted_by} ({firstChange.submitted_by_role})
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                            תאריך: {new Date(firstChange.created_at).toLocaleString('he-IL')}
+                      </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            התקדמות: {processedCount} מתוך {totalChanges} שינויים עובדו
+                          </Typography>
+                            </Box>
+                        
+                        {changes.map((change) => {
+                          if (change.status !== 'pending') {
+                            return null; // Skip already processed changes
+                          }
+                          
+                          const changesData = typeof change.changes_data === 'string' 
+                            ? JSON.parse(change.changes_data) 
+                            : change.changes_data;
+                          
+                          const getChangeDescription = () => {
+                            switch (change.change_type) {
+                              case 'row_add':
+                                return `הוספת שורה - שלב ${changesData.phase_number || 'N/A'}`;
+                              case 'row_update':
+                                return `עדכון שורה #${changesData.row_id || 'N/A'}`;
+                              case 'row_delete':
+                                return `מחיקת שורה #${changesData.row_id || 'N/A'}`;
+                              case 'version':
+                                return `שינוי גרסה: ${changesData.new_version || 'N/A'} → ${changesData.old_version || 'N/A'}`;
+                              case 'role_add':
+                                return `הוספת תפקיד: ${changesData.role || 'N/A'}`;
+                              case 'role_delete':
+                                return `מחיקת תפקיד: ${changesData.role || 'N/A'}`;
+                              case 'script_add':
+                                return `הוספת סקריפט: ${changesData.script_data?.name || 'N/A'}`;
+                              case 'script_update':
+                                return `עדכון סקריפט: ${changesData.old_data?.name || 'N/A'}`;
+                              case 'script_delete':
+                                return `מחיקת סקריפט: ${changesData.script_data?.name || 'N/A'}`;
+                              default:
+                                return `שינוי: ${change.change_type}`;
+                            }
+                          };
+                          
+                          const getChangeDetails = () => {
+                            switch (change.change_type) {
+                              case 'row_add':
+                                const rowData = changesData.row_data || {};
+                                          return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    <Typography variant="body2"><strong>תפקיד:</strong> {rowData.role || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>זמן:</strong> {rowData.time || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>משך:</strong> {rowData.duration || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>תיאור:</strong> {rowData.description || '(ריק)'}</Typography>
+                                    {rowData.script && <Typography variant="body2"><strong>סקריפט:</strong> {rowData.script}</Typography>}
+                                                  </Box>
+                                );
+                              case 'row_update':
+                                const oldData = changesData.old_data || {};
+                                const newData = changesData.new_data || {};
+                                          return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    {oldData.role !== newData.role && (
+                                      <Typography variant="body2">
+                                        <strong>תפקיד:</strong> <span style={{ color: '#51cf66' }}>{newData.role}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.role}</span>
+                                                    </Typography>
+                                                  )}
+                                    {oldData.time !== newData.time && (
+                                      <Typography variant="body2">
+                                        <strong>זמן:</strong> <span style={{ color: '#51cf66' }}>{newData.time}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.time}</span>
+                                                    </Typography>
+                                                  )}
+                                    {oldData.duration !== newData.duration && (
+                                      <Typography variant="body2">
+                                        <strong>משך:</strong> <span style={{ color: '#51cf66' }}>{newData.duration}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.duration}</span>
+                                                    </Typography>
+                                                  )}
+                                    {oldData.description !== newData.description && (
+                                      <Typography variant="body2">
+                                        <strong>תיאור:</strong> <span style={{ color: '#51cf66' }}>{newData.description || '(ריק)'}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.description || '(ריק)'}</span>
+                                                    </Typography>
+                                                  )}
+                                    {oldData.script !== newData.script && (
+                                      <Typography variant="body2">
+                                        <strong>סקריפט:</strong> <span style={{ color: '#51cf66' }}>{newData.script || '(ריק)'}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.script || '(ריק)'}</span>
+                                                    </Typography>
+                                                  )}
+                                    {oldData.status !== newData.status && (
+                                      <Typography variant="body2">
+                                        <strong>סטטוס:</strong> <span style={{ color: '#51cf66' }}>{newData.status}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.status}</span>
+                                                    </Typography>
+                                                  )}
+                                                  </Box>
+                                );
+                              case 'row_delete':
+                                const delRowData = changesData.row_data || {};
+                                return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    <Typography variant="body2"><strong>תפקיד:</strong> {delRowData.role || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>זמן:</strong> {delRowData.time || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>משך:</strong> {delRowData.duration || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>תיאור:</strong> {delRowData.description || '(ריק)'}</Typography>
+                                      </Box>
+                                );
+                              case 'version':
+                                          return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    <Typography variant="body2">
+                                      <strong>נוכחי:</strong> <span style={{ color: '#ff6b6b' }}>{changesData.old_version || 'N/A'}</span>
+                                                </Typography>
+                                    <Typography variant="body2">
+                                      <strong>חדש:</strong> <span style={{ color: '#51cf66' }}>{changesData.new_version || 'N/A'}</span>
+                                                  </Typography>
+                                  </Box>
+                                );
+                              case 'role_add':
+                              case 'role_delete':
+                                return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    <Typography variant="body2"><strong>תפקיד:</strong> {changesData.role || 'N/A'}</Typography>
+                                                  </Box>
+                                );
+                              case 'script_add':
+                                const addScriptData = changesData.script_data || {};
+                                return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    <Typography variant="body2"><strong>שם:</strong> {addScriptData.name || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>נתיב:</strong> {addScriptData.path || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>סטטוס:</strong> {addScriptData.status ? 'פעיל' : 'לא פעיל'}</Typography>
+                                      </Box>
+                                );
+                              case 'script_update':
+                                const oldScript = changesData.old_data || {};
+                                const newScript = changesData.new_data || {};
+                                return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    {oldScript.name !== newScript.name && (
+                                      <Typography variant="body2">
+                                        <strong>שם:</strong> <span style={{ color: '#51cf66' }}>{newScript.name}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.name}</span>
+                                </Typography>
+                                    )}
+                                    {oldScript.path !== newScript.path && (
+                                      <Typography variant="body2">
+                                        <strong>נתיב:</strong> <span style={{ color: '#51cf66' }}>{newScript.path}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.path}</span>
+                                </Typography>
+                                    )}
+                                    {oldScript.status !== newScript.status && (
+                                      <Typography variant="body2">
+                                        <strong>סטטוס:</strong> <span style={{ color: '#51cf66' }}>{newScript.status ? 'פעיל' : 'לא פעיל'}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.status ? 'פעיל' : 'לא פעיל'}</span>
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                );
+                              case 'script_delete':
+                                const delScriptData = changesData.script_data || {};
+                                return (
+                                  <Box sx={{ direction: 'rtl', mt: 1 }}>
+                                    <Typography variant="body2"><strong>שם:</strong> {delScriptData.name || 'N/A'}</Typography>
+                                    <Typography variant="body2"><strong>נתיב:</strong> {delScriptData.path || 'N/A'}</Typography>
+                              </Box>
+                                );
+                              default:
+                                return null;
+                            }
+                          };
+                          
+                          return (
+                            <Box key={change.id} sx={{ mb: 2, p: 2, border: '1px solid #444', borderRadius: 1, bgcolor: '#2d2d2d' }}>
+                              <Typography variant="subtitle1" gutterBottom>
+                                {getChangeDescription()}
+                                </Typography>
+                              {getChangeDetails()}
+                      <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
+                        <Button
+                          variant="contained"
+                          color="success"
+                                  size="small"
+                          onClick={() => handleAcceptPendingChange(change.id)}
+                        >
+                          אישור
+                        </Button>
+                        <Button
+                          variant="contained"
+                          color="error"
+                                  size="small"
+                          onClick={() => handleDeclinePendingChange(change.id)}
+                        >
+                          דחייה
+                        </Button>
+                      </Box>
+                    </Box>
+                  );
+                })}
+                      </Box>
+                    );
+                  });
+                })()}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions style={{ direction: 'rtl' }}>
+            <Typography variant="body2" sx={{ mr: 2, color: 'text.secondary' }}>
+              {pendingChanges.length > 0 && `${pendingChanges.length} שינויים ממתינים`}
+            </Typography>
+            <Button onClick={() => {
+              setReviewModalOpen(false);
+            }}>
+              סגור
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </div>
   );
 };

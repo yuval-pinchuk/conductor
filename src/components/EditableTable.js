@@ -1,10 +1,10 @@
 // src/components/EditableTable.js
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
-  Paper, IconButton, Checkbox, Select, MenuItem, TextField, Button,
-  Typography 
+  Paper, IconButton, Select, MenuItem, TextField, Button,
+  Typography, Dialog, DialogTitle, DialogContent, DialogActions, Alert
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -13,13 +13,15 @@ import ToggleOnIcon from '@mui/icons-material/ToggleOn';
 import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
-import { ALL_AVAILABLE_ROLES } from '../data';
+import WarningIcon from '@mui/icons-material/Warning';
+import { api } from '../api/conductorApi';
 
 // Helper for time input with +/-
 const TimeInput = ({ value, onChange, format }) => {
-  const initialTime = value.startsWith('+') || value.startsWith('-') ? value.substring(1) : value;
+  const safeValue = value || '';
+  const initialTime = safeValue.startsWith('+') || safeValue.startsWith('-') ? safeValue.substring(1) : safeValue;
   const [time, setTime] = useState(initialTime);
-  const [isNegative, setIsNegative] = useState(value.startsWith('-'));
+  const [isNegative, setIsNegative] = useState(safeValue.startsWith('-'));
   
   // Regex for hh:mm:ss or mm:ss structure
   const HHMMSS_STRICT_REGEX = /^[0-9]{2}:[0-5][0-9]:[0-5][0-9]$/; 
@@ -43,7 +45,7 @@ const TimeInput = ({ value, onChange, format }) => {
   };
 
 return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, direction: 'rtl' }}>
       {/* +/- Toggle only for hh:mm:ss column (Time) */}
       {format !== 'mm:ss' && (
         <Button 
@@ -62,12 +64,16 @@ return (
         size="small"
         placeholder={format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}
         error={!isFormatValid} 
-        helperText={!isFormatValid && `Format must be strictly ${format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}`} // Updated helper text
+        helperText={!isFormatValid && `הפורמט חייב להיות בדיוק ${format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}`} // Updated helper text
         style={{ width: format === 'mm:ss' ? 95 : 140 }}
+        sx={{
+          '& .MuiInputBase-input': { fontSize: '1rem' }
+        }}
         inputProps={{ 
             // Maximum length based on format (5 for mm:ss, 8 for hh:mm:ss)
             maxLength: format === 'mm:ss' ? 5 : 8, 
             pattern: currentRegex.source, // Browser validation hint
+            style: { textAlign: 'right', fontSize: '1rem' }
         }}
       />
     </div>
@@ -88,9 +94,25 @@ const EditableTable = ({
     periodicScripts,
     setPeriodicScripts,
     currentClockSeconds,
-    isClockRunning }) => {
+    isClockRunning,
+    onRowStatusChange,
+    onRunRowScript,
+    activeLogins = [],
+    projectId,
+    userName }) => {
   
   const [newRole, setNewRole] = useState('');
+  const [userInfoModal, setUserInfoModal] = useState({ open: false, row: null, phaseIndex: null, rowIndex: null });
+  const [lastProcessedNotificationTimestamp, setLastProcessedNotificationTimestamp] = useState(null);
+  const [noUserWarning, setNoUserWarning] = useState({ open: false, role: '' });
+  const [periodicScriptsHeight, setPeriodicScriptsHeight] = useState(80); // Default estimate
+  const [nextRowHeight, setNextRowHeight] = useState(60); // Default estimate for next row display
+  const [tableHeaderHeight, setTableHeaderHeight] = useState(53); // Default estimate
+  const rowRefs = useRef({});
+  const tableContainerRef = useRef(null);
+  const periodicScriptsRef = useRef(null);
+  const nextRowRef = useRef(null);
+  const tableHeaderRef = useRef(null);
   
   const handleChange = (phaseIndex, rowIndex, field, newValue) => {
     const newPhases = [...tableData];
@@ -105,21 +127,26 @@ const EditableTable = ({
     setTableData(newPhases);
   };
 
-  const handleRunScript = async (phaseIndex, rowIndex, scriptPath) => {
-    if (scriptPath) {
-      console.log(`[SCRIPT RUNNER] Attempting to execute script at: ${scriptPath}`);
-      
-      // Simulate script execution - in real implementation, this would call an API
-      // For now, randomly return true/false to demonstrate the feature
-      // Replace this with actual API call that returns boolean
-      const scriptResult = Math.random() > 0.5; // Simulated result
-      
-      // Update the row with the script result
-      const newPhases = [...tableData];
-      newPhases[phaseIndex].rows[rowIndex].scriptResult = scriptResult;
-      setTableData(newPhases);
-      
-      console.log(`[SCRIPT RUNNER] Script result: ${scriptResult}`);
+  const handleRowStatusSelection = async (phaseIndex, rowIndex, statusValue) => {
+    handleChange(phaseIndex, rowIndex, 'status', statusValue);
+    const row = tableData[phaseIndex].rows[rowIndex];
+    if (row && typeof onRowStatusChange === 'function') {
+      try {
+        await onRowStatusChange(row.id, statusValue);
+      } catch (error) {
+        console.error('Failed to update row status', error);
+      }
+    }
+  };
+
+  const handleRunScript = async (phaseIndex, rowIndex) => {
+    const row = tableData[phaseIndex].rows[rowIndex];
+    if (row?.script && typeof onRunRowScript === 'function') {
+      try {
+        await onRunRowScript(row.id, row.script);
+      } catch (error) {
+        console.error('Failed to run script', error);
+      }
     }
   };
 
@@ -177,6 +204,110 @@ const EditableTable = ({
     setPeriodicScripts(periodicScripts.filter(script => script.id !== scriptId));
   };
 
+  const handleResetAllStatuses = () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm('האם אתה בטוח שברצונך לאפס את כל הסטטוסים ל-N/A? פעולה זו לא ניתנת לביטול.');
+    if (!confirmed) {
+      return;
+    }
+    
+    const newPhases = tableData.map(phase => ({
+      ...phase,
+      rows: phase.rows.map(row => ({ ...row, status: 'N/A' }))
+    }));
+    setTableData(newPhases);
+    
+    // Update all rows via API
+    newPhases.forEach(phase => {
+      phase.rows.forEach(row => {
+        if (row.id && typeof onRowStatusChange === 'function') {
+          onRowStatusChange(row.id, 'N/A').catch(err => {
+            console.error('Failed to update row status', err);
+          });
+        }
+      });
+    });
+  };
+
+  const handleOpenUserInfoModal = async (row, phaseIndex, rowIndex) => {
+    if (isManager) {
+      // Check if there's an active user logged in for this role
+      const hasActiveUser = activeLogins.some(login => login.role === row.role);
+      
+      if (!hasActiveUser) {
+        // Show warning that no user is logged in for this role
+        setNoUserWarning({ open: true, role: row.role });
+        return;
+      }
+      
+      // Manager sends notification to the user with that role
+      try {
+        await api.createUserNotification(projectId, row.role, 'show_modal', {
+          rowId: row.id,
+          phaseIndex,
+          rowIndex,
+          role: row.role,
+          time: row.time,
+          description: row.description,
+          globalRowNumber: getGlobalRowNumber(phaseIndex, rowIndex)
+        });
+      } catch (error) {
+        console.error('Failed to send notification to user', error);
+      }
+    } else {
+      // Regular user opens modal locally
+      setUserInfoModal({ open: true, row, phaseIndex, rowIndex });
+    }
+  };
+
+  const handleCloseUserInfoModal = () => {
+    setUserInfoModal({ open: false, row: null, phaseIndex: null, rowIndex: null });
+  };
+
+  const handleJumpToRow = (targetPhaseIndex, targetRowIndex) => {
+    handleCloseUserInfoModal();
+    const rowId = tableData[targetPhaseIndex]?.rows[targetRowIndex]?.id;
+    if (rowId && rowRefs.current[rowId] && tableContainerRef.current) {
+      const rowElement = rowRefs.current[rowId];
+      const containerElement = tableContainerRef.current;
+      
+      // Calculate the position of the row relative to the container
+      const containerRect = containerElement.getBoundingClientRect();
+      const rowRect = rowElement.getBoundingClientRect();
+      
+      // Calculate scroll position to center the row in the container
+      const scrollTop = containerElement.scrollTop;
+      const rowOffsetTop = rowElement.offsetTop;
+      const containerHeight = containerElement.clientHeight;
+      const rowHeight = rowElement.offsetHeight;
+      
+      // Scroll to center the row in the visible area
+      const targetScrollTop = rowOffsetTop - (containerHeight / 2) + (rowHeight / 2);
+      
+      containerElement.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
+      
+      // Highlight the row with green blinking for 3 seconds
+      const originalBg = rowElement.style.backgroundColor;
+      let isHighlighted = true;
+      const blinkInterval = setInterval(() => {
+        if (isHighlighted) {
+          rowElement.style.backgroundColor = 'rgba(76, 175, 80, 0.6)'; // Green
+        } else {
+          rowElement.style.backgroundColor = originalBg;
+        }
+        isHighlighted = !isHighlighted;
+      }, 300); // Blink every 300ms
+      
+      setTimeout(() => {
+        clearInterval(blinkInterval);
+        rowElement.style.backgroundColor = originalBg;
+      }, 3000); // Stop after 3 seconds
+    }
+  };
+
   const parseTimeToSeconds = (timeStr) => {
     if (!timeStr || typeof timeStr !== 'string') return null;
     const parts = timeStr.split(':').map(Number);
@@ -184,11 +315,161 @@ const EditableTable = ({
     return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
   };
 
-  return (
-      <TableContainer component={Paper} style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0' }}>
+  // Calculate total rows before current phase for continuous numbering
+  const getGlobalRowNumber = (phaseIndex, rowIndex) => {
+    let count = 0;
+    for (let i = 0; i < phaseIndex; i++) {
+      count += tableData[i]?.rows?.length || 0;
+    }
+    return count + rowIndex + 1;
+  };
+
+  // Find the next relevant row with N/A status
+  const getNextRelevantRow = () => {
+    for (let phaseIndex = 0; phaseIndex < tableData.length; phaseIndex++) {
+      const phase = tableData[phaseIndex];
+      for (let rowIndex = 0; rowIndex < phase.rows.length; rowIndex++) {
+        const row = phase.rows[rowIndex];
+        const isStatusNA = !row.status || row.status === 'N/A';
+        
+        if (isStatusNA) {
+          // Manager sees any N/A row, users only see their role's N/A rows
+          if (isManager || row.role === userRole) {
+            return {
+              row,
+              phaseIndex,
+              rowIndex,
+              globalRowNumber: getGlobalRowNumber(phaseIndex, rowIndex)
+            };
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const nextRelevantRow = getNextRelevantRow();
+
+  // Process notification command (for non-manager users)
+  const processNotification = (command, notificationData) => {
+    if (!command || !notificationData) return;
+    
+    if (command === 'show_modal') {
+      // Find the row in tableData
+      const targetPhaseIndex = notificationData.phaseIndex;
+      const targetRowIndex = notificationData.rowIndex;
       
-        {/* Periodic Scripts Row */}
-        <div style={{ padding: '15px', borderBottom: '2px solid #444', backgroundColor: '#1e1e1e' }}>
+      if (targetPhaseIndex !== undefined && targetRowIndex !== undefined) {
+        const phase = tableData[targetPhaseIndex];
+        if (phase && phase.rows[targetRowIndex]) {
+          const row = phase.rows[targetRowIndex];
+          setUserInfoModal({ 
+            open: true, 
+            row, 
+            phaseIndex: targetPhaseIndex, 
+            rowIndex: targetRowIndex 
+          });
+        }
+      }
+    }
+  };
+
+  // Poll for notifications (for non-manager users)
+  useEffect(() => {
+    if (!isManager && projectId && userRole && userName) {
+      const interval = setInterval(() => {
+        api.getUserNotification(projectId, userRole, userName)
+          .then(response => {
+            if (response.command && response.timestamp) {
+              if (response.timestamp !== lastProcessedNotificationTimestamp) {
+                processNotification(response.command, response.data);
+                setLastProcessedNotificationTimestamp(response.timestamp);
+                // Clear the notification after processing
+                api.clearUserNotification(projectId, userRole, userName).catch(() => {});
+              }
+            }
+          })
+          .catch(err => {
+            // Silently fail - polling is not critical
+          });
+      }, 500);
+
+      return () => clearInterval(interval);
+    }
+  }, [isManager, projectId, userRole, userName, lastProcessedNotificationTimestamp, tableData]);
+
+  // Measure periodic scripts height for sticky positioning
+  useEffect(() => {
+    if (periodicScriptsRef.current) {
+      const updateHeight = () => {
+        const height = periodicScriptsRef.current?.offsetHeight || 80;
+        setPeriodicScriptsHeight(height);
+      };
+      updateHeight();
+      // Update on window resize
+      window.addEventListener('resize', updateHeight);
+      return () => window.removeEventListener('resize', updateHeight);
+    }
+  }, [periodicScripts, isEditing, isManager]);
+
+  // Measure next row height for sticky positioning
+  useEffect(() => {
+    if (nextRelevantRow && nextRowRef.current) {
+      const updateHeight = () => {
+        const height = nextRowRef.current?.offsetHeight || 60;
+        setNextRowHeight(height);
+      };
+      updateHeight();
+      // Update on window resize
+      window.addEventListener('resize', updateHeight);
+      return () => window.removeEventListener('resize', updateHeight);
+    } else if (!nextRelevantRow) {
+      // No next row, set height to 0
+      setNextRowHeight(0);
+    }
+  }, [nextRelevantRow, isEditing]);
+
+  // Measure table header height for sticky positioning
+  useEffect(() => {
+    if (tableHeaderRef.current) {
+      const updateHeight = () => {
+        const height = tableHeaderRef.current?.offsetHeight || 53;
+        setTableHeaderHeight(height);
+      };
+      // Use requestAnimationFrame to ensure the table is rendered
+      const rafId = requestAnimationFrame(() => {
+        updateHeight();
+        // Also check after a small delay to catch any late rendering
+        setTimeout(updateHeight, 100);
+      });
+      // Update on window resize
+      window.addEventListener('resize', updateHeight);
+      return () => {
+        cancelAnimationFrame(rafId);
+        window.removeEventListener('resize', updateHeight);
+      };
+    }
+  }, [isEditing, tableData]);
+
+  return (
+      <TableContainer 
+        ref={tableContainerRef}
+        component={Paper} 
+        style={{ maxHeight: 'calc(100vh - 150px)', overflow: 'auto', margin: '20px 0', direction: 'rtl', position: 'relative' }}
+      >
+      
+        {/* Periodic Scripts Row - Sticky */}
+        <div 
+          ref={periodicScriptsRef}
+          style={{ 
+          padding: '15px', 
+          borderBottom: '2px solid #444', 
+          backgroundColor: '#1e1e1e', 
+          direction: 'rtl',
+          position: 'sticky',
+          top: 0,
+          zIndex: 10
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 15, flexWrap: 'wrap' }}>
             {periodicScripts.map((script) => (
               <div
@@ -207,9 +488,10 @@ const EditableTable = ({
                       value={script.name}
                       onChange={(e) => handleUpdatePeriodicScript(script.id, 'name', e.target.value)}
                       size="small"
-                      placeholder="Script Name"
+                      placeholder="שם סקריפט"
                       style={{ width: 120 }}
                       sx={{
+                        direction: 'rtl',
                         '& .MuiOutlinedInput-root': {
                           backgroundColor: '#2d2d2d',
                           color: 'white',
@@ -222,6 +504,9 @@ const EditableTable = ({
                           '&.Mui-focused fieldset': {
                             borderColor: '#999',
                           },
+                        },
+                        '& .MuiInputBase-input': {
+                          textAlign: 'right',
                         },
                         '& .MuiInputBase-input::placeholder': {
                           color: '#aaa',
@@ -233,9 +518,10 @@ const EditableTable = ({
                       value={script.path}
                       onChange={(e) => handleUpdatePeriodicScript(script.id, 'path', e.target.value)}
                       size="small"
-                      placeholder="Script Path"
+                      placeholder="נתיב סקריפט"
                       style={{ width: 200 }}
                       sx={{
+                        direction: 'rtl',
                         '& .MuiOutlinedInput-root': {
                           backgroundColor: '#2d2d2d',
                           color: 'white',
@@ -248,6 +534,9 @@ const EditableTable = ({
                           '&.Mui-focused fieldset': {
                             borderColor: '#999',
                           },
+                        },
+                        '& .MuiInputBase-input': {
+                          textAlign: 'right',
                         },
                         '& .MuiInputBase-input::placeholder': {
                           color: '#aaa',
@@ -280,7 +569,7 @@ const EditableTable = ({
                         onClick={() => handleRemovePeriodicScript(script.id)}
                         size="small"
                         color="error"
-                        title="Remove Script"
+                        title="הסר סקריפט"
                       >
                         <DeleteIcon />
                       </IconButton>
@@ -316,44 +605,143 @@ const EditableTable = ({
                 onClick={handleAddPeriodicScript}
                 size="small"
                 color="primary"
-                title="Add Periodic Script"
-                style={{ marginLeft: 10 }}
+                title="הוסף סקריפט תקופתי"
+                style={{ marginRight: 10 }}
               >
                 <AddIcon />
               </IconButton>
             )}
           </div>
         </div>
+
+        {/* Next Relevant Row Display - Sticky */}
+        {nextRelevantRow && (
+          <div 
+            ref={nextRowRef}
+            style={{ 
+              padding: '10px 15px', 
+              borderBottom: '2px solid #2196f3', 
+              backgroundColor: '#0d47a1', 
+              direction: 'rtl',
+              position: 'sticky',
+              top: `${periodicScriptsHeight}px`,
+              zIndex: 9,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 15,
+              color: 'white',
+              fontSize: '1rem'
+            }}
+          >
+            <Typography variant="body1" style={{ fontWeight: 'bold', minWidth: '120px' }}>
+              משימה הבאה:
+            </Typography>
+            <Typography variant="body1" style={{ minWidth: '80px' }}>
+              <strong>שורה #{nextRelevantRow.globalRowNumber}</strong>
+            </Typography>
+            <Typography variant="body1" style={{ minWidth: '100px' }}>
+              <strong>תפקיד:</strong> {nextRelevantRow.row.role}
+            </Typography>
+            <Typography variant="body1" style={{ minWidth: '120px' }}>
+              <strong>זמן:</strong> {nextRelevantRow.row.time}
+            </Typography>
+            <Typography variant="body1" style={{ flex: 1 }}>
+              <strong>תיאור:</strong> {nextRelevantRow.row.description || 'אין תיאור'}
+            </Typography>
+            <Button
+              variant="contained"
+              color="success"
+              size="small"
+              onClick={() => handleJumpToRow(nextRelevantRow.phaseIndex, nextRelevantRow.rowIndex)}
+              style={{ marginRight: 'auto' }}
+            >
+              קפוץ לשורה
+            </Button>
+          </div>
+        )}
       
         {/* Manager Controls Area */}
         {isEditing && (
-          <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc' }}>
+          <div style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 15, borderBottom: '1px solid #ccc', direction: 'rtl', flexWrap: 'wrap' }}>
           
-            {/* Add New Role controls (existing) */}
-            <Button variant="contained" onClick={handleAddNewRole}>
-              Add New Role
+            {/* Add New Role controls */}
+            <TextField
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value)}
+              placeholder="שם תפקיד חדש"
+              size="small"
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  handleAddNewRole();
+                }
+              }}
+              sx={{
+                direction: 'rtl',
+                '& .MuiOutlinedInput-root': {
+                  backgroundColor: '#2d2d2d',
+                  color: 'white',
+                  '& fieldset': {
+                    borderColor: '#555',
+                  },
+                  '&:hover fieldset': {
+                    borderColor: '#777',
+                  },
+                  '&.Mui-focused fieldset': {
+                    borderColor: '#999',
+                  },
+                },
+                '& .MuiInputBase-input': {
+                  textAlign: 'right',
+                  fontSize: '1rem'
+                },
+                '& .MuiInputBase-input::placeholder': {
+                  color: '#aaa',
+                  opacity: 1,
+                },
+              }}
+            />
+            <Button variant="contained" onClick={handleAddNewRole} style={{ direction: 'rtl' }}>
+              הוסף תפקיד חדש
             </Button>
-            {/* ... New Role TextField ... */}
           
-            {/* Add New Phase Button (NEW) */}
-            <Button variant="contained" color="secondary" onClick={handleAddPhase}>
-              Add New Phase
+            {/* Add New Phase Button */}
+            <Button variant="contained" color="secondary" onClick={handleAddPhase} style={{ direction: 'rtl' }}>
+              הוסף שלב חדש
             </Button>
+
+            {/* Reset All Statuses Button */}
+            {isManager && (
+              <Button 
+                variant="outlined" 
+                color="warning" 
+                onClick={handleResetAllStatuses}
+                style={{ direction: 'rtl' }}
+              >
+                אפס כל הסטטוסים ל-N/A
+              </Button>
+            )}
 
           </div>
         )}
 
-      <Table stickyHeader size="small">
+      <Table stickyHeader size="small" sx={{ 
+        '& .MuiTableCell-root': { fontSize: '1rem' }, 
+        '& .MuiTableHead-root': { 
+          position: 'sticky', 
+          top: `${periodicScriptsHeight + nextRowHeight}px`, 
+          zIndex: 8 
+        } 
+      }}>
         <TableHead>
-          <TableRow>
-            <TableCell style={{ width: '5%' }}>#</TableCell>
-            <TableCell style={{ width: '10%' }}>Role</TableCell>
-            <TableCell style={{ width: '15%' }}>Time (hh:mm:ss)</TableCell>
-            <TableCell style={{ width: '10%' }}>Duration (mm:ss)</TableCell>
-            <TableCell style={{ width: '35%' }}>Description</TableCell>
-            <TableCell style={{ width: '15%' }}>Script</TableCell>
-            <TableCell style={{ width: '10%' }}>Status</TableCell>
-            {isEditing && <TableCell style={{ width: '5%' }}>Actions</TableCell>}
+          <TableRow ref={tableHeaderRef}>
+            <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>#</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>תפקיד</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>זמן</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>משך</TableCell>
+            <TableCell style={{ width: '35%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>תיאור</TableCell>
+            <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>סקריפט</TableCell>
+            <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>סטטוס</TableCell>
+            {isEditing && <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>פעולות</TableCell>}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -367,31 +755,36 @@ const EditableTable = ({
                 <TableRow style={{ backgroundColor: '#1e1e1e' }}>
                   <TableCell colSpan={isEditing ? 8 : 7} style={{ 
                       fontWeight: 'bold', 
-                      backgroundColor: '#1e1e1e' 
+                      backgroundColor: '#1e1e1e',
+                      textAlign: 'right',
+                      fontSize: '1.1rem',
+                      position: 'sticky',
+                      top: `${periodicScriptsHeight + nextRowHeight + tableHeaderHeight}px`, // Below periodic scripts + next row + table header height
+                      zIndex: 7
                   }}>
-                    Phase {phase.phase}
+                    שלב {phase.phase}
                     {/* Phase Activation Toggle */}
                     {isManager && (
                         <IconButton 
-                            onClick={() => handleTogglePhaseActivation(phase.phase)} 
+                            onClick={() => handleTogglePhaseActivation(phase)} 
                             size="small" 
                             color={isPhaseActive ? 'success' : 'secondary'}
-                            title={isPhaseActive ? "Deactivate Phase" : "Activate Phase"}
+                            title={isPhaseActive ? "פעל שלב" : "השבת שלב"}
                         >
                             {isPhaseActive ? <ToggleOnIcon /> : <ToggleOffIcon />}
                         </IconButton>
                     )}
-                    {isPhaseActive && <span style={{ marginLeft: 8, color: 'lightgreen' }}>(ACTIVE)</span>}
+                    {isPhaseActive && <span style={{ marginRight: 8, color: 'lightgreen' }}>(פעיל)</span>}
 
                     {isEditing && (
                       <>
                         {/* Button to ADD Row */}
-                        <IconButton onClick={() => handleAddRow(phaseIndex)} size="small" color="primary" title="Add Row">
+                        <IconButton onClick={() => handleAddRow(phaseIndex)} size="small" color="primary" title="הוסף שורה">
                           <AddIcon />
                         </IconButton>
                         
                         {/* Button to DELETE Phase */} 
-                        <IconButton onClick={() => handleRemovePhase(phaseIndex)} size="small" color="secondary" title="Delete Phase">
+                        <IconButton onClick={() => handleRemovePhase(phaseIndex)} size="small" color="secondary" title="מחק שלב">
                           <DeleteIcon />
                         </IconButton>
                       </>
@@ -408,10 +801,17 @@ const EditableTable = ({
                 
                 const rowTimeSeconds = parseTimeToSeconds(row.time);
                 const isStatusUnset = !row.status || row.status === 'N/A';
+                // When using target time countdown:
+                // - currentClockSeconds is negative when counting down (e.g., -3600 = 1 hour until target)
+                // - currentClockSeconds is positive when counting up past target (e.g., +3600 = 1 hour past target)
+                // - Row times are positive (e.g., "+01:30:00" = 5400 seconds from target)
+                // For highlighting: we want to highlight when the clock has reached or passed the row time
+                // During countdown (negative): we haven't reached any positive row times yet, so don't highlight
+                // After target (positive): compare normally - if currentClockSeconds >= rowTimeSeconds, highlight
                 const hasClockPassedRowTime = Boolean(
                   isClockRunning &&
-                  currentClockSeconds >= 0 &&
                   rowTimeSeconds !== null &&
+                  currentClockSeconds >= 0 && // Only check when at or past target (not counting down)
                   currentClockSeconds >= rowTimeSeconds
                 );
                 const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
@@ -430,7 +830,20 @@ const EditableTable = ({
                     transition: 'background-color 0.2s ease',
                   };
 
-                  if (isUserRoleMatch) {
+                  // Special case: user's row that is overdue - use orange/red to make it very visible
+                  if (isUserRoleMatch && shouldHighlightOverdue) {
+                    const overdueUserOverlay = 'rgba(255, 152, 0, 0.6)'; // Stronger orange background
+                    styles = {
+                      ...styles,
+                      backgroundColor: baseColor === 'transparent' ? overdueUserOverlay : overdueUserOverlay,
+                      boxShadow: 'inset 0 0 0 4px rgba(255, 87, 34, 1), 0 0 25px rgba(255, 152, 0, 1)',
+                      borderLeft: '8px solid #ff5722', // Thicker orange-red border
+                      borderRight: '4px solid rgba(255, 87, 34, 0.8)',
+                      borderTop: '2px solid rgba(255, 152, 0, 0.6)',
+                      borderBottom: '2px solid rgba(255, 152, 0, 0.6)',
+                    };
+                  } else if (isUserRoleMatch) {
+                    // User's row that is not overdue - blue highlight
                     const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
                     styles = {
                       ...styles,
@@ -438,44 +851,51 @@ const EditableTable = ({
                       boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
                       borderLeft: '4px solid #2196f3',
                     };
-                  }
-
-                  if (shouldHighlightOverdue) {
-                    const overdueOverlay = 'rgba(255, 193, 7, 0.18)';
+                  } else if (shouldHighlightOverdue) {
+                    // Overdue row that doesn't belong to user - yellow highlight
+                    const overdueOverlay = 'rgba(255, 235, 59, 0.4)';
                     styles = {
                       ...styles,
                       backgroundColor: styles.backgroundColor === 'transparent' ? overdueOverlay : styles.backgroundColor,
-                      boxShadow: `${styles.boxShadow ? `${styles.boxShadow}, ` : ''}0 0 10px rgba(255, 193, 7, 0.4)`,
-                      border: styles.border || '1px solid rgba(255, 193, 7, 0.7)',
+                      boxShadow: `${styles.boxShadow ? `${styles.boxShadow}, ` : ''}0 0 15px rgba(255, 235, 59, 0.7)`,
+                      border: styles.border || '2px solid rgba(255, 235, 59, 0.9)',
                     };
                   }
 
                   return styles;
                 };
                 
+                const globalRowNumber = getGlobalRowNumber(phaseIndex, rowIndex);
                 return ( // <-- Start of the inner return
-                <TableRow key={row.id} style={getRowStyles()}>
-                  {/* Row Number */}
-                  <TableCell align="center" style={{ fontWeight: 'bold' }}>
-                    {rowIndex + 1}
+                <TableRow 
+                  key={row.id} 
+                  style={getRowStyles()}
+                  ref={el => {
+                    if (el) rowRefs.current[row.id] = el;
+                  }}
+                >
+                  {/* Row Number - Global across all phases */}
+                  <TableCell align="center" style={{ fontWeight: 'bold', fontSize: '1rem' }}>
+                    {globalRowNumber}
                   </TableCell>
                   {/* Role */}
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                       <Select
                         value={row.role}
                         onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
                         size="small"
-                        style={{ width: '100%' }}
+                        style={{ width: '100%', direction: 'rtl', fontSize: '1rem' }}
+                        sx={{ '& .MuiSelect-select': { fontSize: '1rem' } }}
                       >
-                        {allRoles.map(role => <MenuItem key={role} value={role}>{role}</MenuItem>)}
+                        {allRoles.map(role => <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>)}
                       </Select>
                     ) : (
                       row.role
                     )}
                   </TableCell>
                   
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                         <TimeInput 
                         value={row.time}
@@ -487,7 +907,7 @@ const EditableTable = ({
                     )}
                   </TableCell>
 
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                         <TimeInput 
                         value={row.duration}
@@ -500,7 +920,7 @@ const EditableTable = ({
                   </TableCell>
 
                   {/* Description (Free Text, Expands Row) */}
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                       <TextField
                         value={row.description}
@@ -508,77 +928,116 @@ const EditableTable = ({
                         size="small"
                         multiline
                         fullWidth
+                        sx={{ 
+                          direction: 'rtl', 
+                          '& textarea': { textAlign: 'right', fontSize: '1rem' },
+                          '& .MuiInputBase-input': { fontSize: '1rem' }
+                        }}
                       />
                     ) : (
-                      <Typography style={{ whiteSpace: 'pre-wrap' }}>
+                      <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '1rem' }}>
                         {row.description}
                       </Typography>
                     )}
                   </TableCell>
                   
                   {/* Script Column */}
-                  <TableCell>
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
                     {isEditing ? (
                       <TextField
                         value={row.script || ''}
                         onChange={(e) => handleChange(phaseIndex, rowIndex, 'script', e.target.value)}
                         size="small"
-                        placeholder="Path/API Endpoint"
+                        placeholder="נתיב/נקודת קצה API"
                         fullWidth
+                        sx={{ 
+                          direction: 'rtl', 
+                          '& input': { textAlign: 'right', fontSize: '1rem' },
+                          '& .MuiInputBase-input': { fontSize: '1rem' }
+                        }}
                       />
                     ) : (
                       row.script ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Button 
-                            variant="contained" 
-                            size="small"
-                            color="primary"
-                            startIcon={<PlayArrowIcon />}
-                            onClick={() => handleRunScript(phaseIndex, rowIndex, row.script)}
-                          >
-                            Run Script
-                          </Button>
-                          {row.scriptResult !== undefined && (
-                            row.scriptResult ? (
-                              <CheckIcon color="success" style={{ fontSize: 24 }} />
-                            ) : (
-                              <CloseIcon color="error" style={{ fontSize: 24 }} />
-                            )
-                          )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Button 
+                              variant="contained" 
+                              size="small"
+                              color="primary"
+                              endIcon={<PlayArrowIcon />}
+                              onClick={() => handleRunScript(phaseIndex, rowIndex)}
+                              sx={{ fontSize: '1rem' }}
+                            >
+                              הרץ סקריפט
+                            </Button>
+                            {row.scriptResult !== undefined && (
+                              row.scriptResult ? (
+                                <CheckIcon color="success" style={{ fontSize: 24 }} />
+                              ) : (
+                                <CloseIcon color="error" style={{ fontSize: 24 }} />
+                              )
+                            )}
+                          </div>
                         </div>
                       ) : (
-                        <span style={{ color: '#666' }}>—</span>
+                        <span style={{ color: '#666', fontSize: '1rem' }}>—</span>
                       )
                     )}
                   </TableCell>
                   
-                  {/* Status (Pass/Fail) Column - V and X buttons */}
-                  <TableCell>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <IconButton
-                        onClick={() => handleChange(phaseIndex, rowIndex, 'status', 'Passed')}
-                        size="small"
-                        disabled={!canChangeStatus}
-                        color={row.status === 'Passed' ? 'success' : 'default'}
-                        title="Passed"
-                      >
-                        <CheckIcon />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => handleChange(phaseIndex, rowIndex, 'status', 'Failed')}
-                        size="small"
-                        disabled={!canChangeStatus}
-                        color={row.status === 'Failed' ? 'error' : 'default'}
-                        title="Failed"
-                      >
-                        <CloseIcon />
-                      </IconButton>
+                  {/* Status (Pass/Fail/N/A) Column - V, X, N/A buttons, and User Info for Manager */}
+                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+                    <div style={{ display: 'flex', width: '100%' }}>
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <IconButton
+                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
+                          size="small"
+                          disabled={!canChangeStatus}
+                          color={row.status === 'Passed' ? 'success' : 'default'}
+                          title="עבר"
+                        >
+                          <CheckIcon />
+                        </IconButton>
+                        <IconButton
+                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Failed')}
+                          size="small"
+                          disabled={!canChangeStatus}
+                          color={row.status === 'Failed' ? 'error' : 'default'}
+                          title="נכשל"
+                        >
+                          <CloseIcon />
+                        </IconButton>
+                        <IconButton
+                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'N/A')}
+                          size="small"
+                          disabled={!canChangeStatus}
+                          color={row.status === 'N/A' ? 'default' : 'default'}
+                          title="לא רלוונטי"
+                          sx={{
+                            border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
+                            borderRadius: '4px'
+                          }}
+                        >
+                          <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
+                        </IconButton>
+                        {/* User Info Button for Manager (available always, not just in edit mode) */}
+                        {isManager && (
+                          <IconButton
+                            onClick={() => handleOpenUserInfoModal(row, phaseIndex, rowIndex)}
+                            size="small"
+                            color="warning"
+                            title="שלח התראה למשתמש"
+                          >
+                            <WarningIcon />
+                          </IconButton>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   
                   {/* Actions (Remove) */}
                   {isEditing && (
-                    <TableCell>
+                    <TableCell style={{ textAlign: 'center', fontSize: '1rem' }}>
                       <IconButton onClick={() => handleRemoveRow(phaseIndex, rowIndex)} size="small" color="error">
                         <DeleteIcon />
                       </IconButton>
@@ -591,6 +1050,73 @@ const EditableTable = ({
           )})}
         </TableBody>
       </Table>
+
+      {/* User Info Modal */}
+      <Dialog 
+        open={userInfoModal.open} 
+        onClose={handleCloseUserInfoModal}
+        maxWidth="sm"
+        fullWidth
+        dir="rtl"
+      >
+        <DialogTitle>
+          התראה: שורה #{getGlobalRowNumber(userInfoModal.phaseIndex || 0, userInfoModal.rowIndex || 0)}
+        </DialogTitle>
+        <DialogContent>
+          {userInfoModal.row && (
+            <div style={{ direction: 'rtl' }}>
+              <Typography variant="body1" style={{ marginBottom: 10 }}>
+                <strong>תפקיד:</strong> {userInfoModal.row.role}
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: 10 }}>
+                <strong>זמן:</strong> {userInfoModal.row.time}
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: 20 }}>
+                <strong>תיאור:</strong> {userInfoModal.row.description || 'אין תיאור'}
+              </Typography>
+              
+              <Button
+                variant="contained"
+                color="primary"
+                fullWidth
+                onClick={() => {
+                  // Jump to the row
+                  if (userInfoModal.phaseIndex !== null && userInfoModal.rowIndex !== null) {
+                    handleJumpToRow(userInfoModal.phaseIndex, userInfoModal.rowIndex);
+                  }
+                }}
+                style={{ marginTop: 10 }}
+              >
+                קפוץ לשורה
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+        <DialogActions style={{ direction: 'rtl' }}>
+          <Button onClick={handleCloseUserInfoModal}>סגור</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* No User Warning Dialog */}
+      <Dialog 
+        open={noUserWarning.open} 
+        onClose={() => setNoUserWarning({ open: false, role: '' })}
+        maxWidth="sm"
+        fullWidth
+        dir="rtl"
+      >
+        <DialogTitle>אזהרה</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" style={{ direction: 'rtl', marginBottom: 10 }}>
+            אין משתמש מחובר לתפקיד "{noUserWarning.role}" כרגע.
+            <br />
+            לא ניתן לשלוח התראה למשתמש שאינו מחובר.
+          </Alert>
+        </DialogContent>
+        <DialogActions style={{ direction: 'rtl' }}>
+          <Button onClick={() => setNoUserWarning({ open: false, role: '' })}>אישור</Button>
+        </DialogActions>
+      </Dialog>
     </TableContainer>
   );
 };
