@@ -81,6 +81,7 @@ def get_timer_state(project_id):
         'isRunning': project.timer_is_running,
         'lastStartTime': (project.timer_last_start_time.isoformat() + 'Z') if project.timer_last_start_time else None,
         'initialOffset': project.timer_initial_offset,
+        'targetDateTime': (project.timer_target_datetime.isoformat() + 'Z') if project.timer_target_datetime else None,
         'secondsElapsed': seconds_elapsed
     }), 200
 

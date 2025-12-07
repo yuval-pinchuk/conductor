@@ -23,6 +23,7 @@ class Project(db.Model):
     timer_is_running = db.Column(db.Boolean, default=False, nullable=False)
     timer_last_start_time = db.Column(db.DateTime, nullable=True)  # Server timestamp when timer was started
     timer_initial_offset = db.Column(db.Integer, default=0, nullable=False)  # Total seconds elapsed before current run
+    timer_target_datetime = db.Column(db.DateTime, nullable=True)  # Target datetime for countdown
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

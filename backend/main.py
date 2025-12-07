@@ -77,7 +77,8 @@ def create_app():
             emit('timerStateUpdate', {
                 'isRunning': True,
                 'lastStartTime': now.isoformat() + 'Z',  # Explicitly mark as UTC
-                'initialOffset': initial_offset
+                'initialOffset': initial_offset,
+                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_start: {e}')
@@ -117,7 +118,8 @@ def create_app():
             emit('timerStateUpdate', {
                 'isRunning': False,
                 'lastStartTime': None,
-                'initialOffset': final_offset
+                'initialOffset': final_offset,
+                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_stop: {e}')
@@ -159,10 +161,106 @@ def create_app():
             emit('timerStateUpdate', {
                 'isRunning': False,
                 'lastStartTime': None,
-                'initialOffset': final_offset
+                'initialOffset': final_offset,
+                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_set_time: {e}')
+            import traceback
+            traceback.print_exc()
+    
+    @socketio.on('requestSetTarget')
+    def handle_request_set_target(data):
+        """Handle timer set target time request"""
+        try:
+            project_id = data.get('project_id')
+            target_datetime_str = data.get('target_datetime')
+            if not project_id or not target_datetime_str:
+                return
+            
+            with db.session.begin():
+                project = Project.query.get(project_id)
+                if not project:
+                    return
+                
+                # Parse the target datetime string (comes as ISO string from frontend)
+                try:
+                    target_datetime = datetime.fromisoformat(target_datetime_str.replace('Z', '+00:00'))
+                except ValueError:
+                    # Try parsing without timezone
+                    target_datetime = datetime.fromisoformat(target_datetime_str)
+                
+                project.timer_target_datetime = target_datetime
+                
+                # If timer is running, we need to calculate the offset based on target
+                if project.timer_is_running:
+                    now = datetime.utcnow()
+                    # Calculate seconds until/from target
+                    diff_seconds = int((target_datetime - now).total_seconds())
+                    # Set initial offset to this difference
+                    project.timer_initial_offset = diff_seconds
+                    project.timer_last_start_time = now
+                else:
+                    # Timer not running, just set the target
+                    # Calculate what the offset should be when we start
+                    now = datetime.utcnow()
+                    diff_seconds = int((target_datetime - now).total_seconds())
+                    project.timer_initial_offset = diff_seconds
+                
+                db.session.flush()
+                final_offset = project.timer_initial_offset
+                final_target = project.timer_target_datetime
+            
+            # Broadcast the new state to all clients in the room
+            room = f'timer_{project_id}'
+            emit('timerStateUpdate', {
+                'isRunning': project.timer_is_running,
+                'lastStartTime': project.timer_last_start_time.isoformat() + 'Z' if project.timer_last_start_time else None,
+                'initialOffset': final_offset,
+                'targetDateTime': final_target.isoformat() + 'Z' if final_target else None
+            }, room=room)
+        except Exception as e:
+            print(f'Error in handle_request_set_target: {e}')
+            import traceback
+            traceback.print_exc()
+    
+    @socketio.on('requestClearTarget')
+    def handle_request_clear_target(data):
+        """Handle timer clear target time request"""
+        try:
+            project_id = data.get('project_id')
+            if not project_id:
+                return
+            
+            with db.session.begin():
+                project = Project.query.get(project_id)
+                if not project:
+                    return
+                
+                # Clear target datetime
+                project.timer_target_datetime = None
+                
+                # If timer is running, we need to recalculate offset
+                if project.timer_is_running and project.timer_last_start_time:
+                    now = datetime.utcnow()
+                    elapsed_this_run = int((now - project.timer_last_start_time).total_seconds())
+                    # Reset to accumulated time (not countdown)
+                    project.timer_initial_offset = elapsed_this_run
+                    project.timer_last_start_time = now
+                
+                db.session.flush()
+                final_offset = project.timer_initial_offset
+            
+            # Broadcast the new state to all clients in the room
+            room = f'timer_{project_id}'
+            emit('timerStateUpdate', {
+                'isRunning': project.timer_is_running,
+                'lastStartTime': project.timer_last_start_time.isoformat() + 'Z' if project.timer_last_start_time else None,
+                'initialOffset': final_offset,
+                'targetDateTime': None
+            }, room=room)
+        except Exception as e:
+            print(f'Error in handle_request_clear_target: {e}')
             import traceback
             traceback.print_exc()
     

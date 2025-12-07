@@ -9,6 +9,7 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [lastStartTime, setLastStartTime] = useState(null);
   const [initialOffset, setInitialOffset] = useState(0);
+  const [targetDateTime, setTargetDateTime] = useState(null);
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
 
@@ -47,6 +48,22 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
         }
         setLastStartTime(parsedStartTime);
         
+        // Parse target datetime if present
+        if (data.targetDateTime) {
+          let parsedTarget = null;
+          const timeString = data.targetDateTime.endsWith('Z') || data.targetDateTime.match(/[+-]\d{2}:\d{2}$/)
+            ? data.targetDateTime 
+            : data.targetDateTime + 'Z';
+          parsedTarget = new Date(timeString);
+          if (isNaN(parsedTarget.getTime())) {
+            console.error('Invalid targetDateTime from server:', data.targetDateTime);
+            parsedTarget = null;
+          }
+          setTargetDateTime(parsedTarget);
+        } else {
+          setTargetDateTime(null);
+        }
+        
         // Calculate initial elapsed time
         let initialElapsed = data.initialOffset || 0;
         if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
@@ -54,6 +71,16 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
           const now = new Date();
           const elapsedSinceStart = Math.floor((now - parsedStartTime) / 1000);
           initialElapsed += elapsedSinceStart;
+        }
+        // If we have a target, calculate countdown instead
+        if (data.targetDateTime) {
+          const parsedTarget = data.targetDateTime.endsWith('Z') || data.targetDateTime.match(/[+-]\d{2}:\d{2}$/)
+            ? new Date(data.targetDateTime)
+            : new Date(data.targetDateTime + 'Z');
+          if (!isNaN(parsedTarget.getTime())) {
+            const now = new Date();
+            initialElapsed = Math.floor((parsedTarget - now) / 1000);
+          }
         }
         setSecondsElapsed(initialElapsed);
         
@@ -141,9 +168,31 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       }
       setLastStartTime(parsedStartTime);
       
+      // Parse target datetime if present
+      let parsedTarget = null;
+      if (data.targetDateTime) {
+        let timeString = data.targetDateTime;
+        if (!timeString.endsWith('Z') && !timeString.match(/[+-]\d{2}:\d{2}$/)) {
+          timeString = timeString + 'Z';
+        }
+        parsedTarget = new Date(timeString);
+        if (isNaN(parsedTarget.getTime())) {
+          console.error('Invalid targetDateTime from server:', data.targetDateTime);
+          parsedTarget = null;
+        }
+        setTargetDateTime(parsedTarget);
+      } else {
+        setTargetDateTime(null);
+      }
+      
       // Calculate current elapsed time
       let currentElapsed = data.initialOffset || 0;
-      if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
+      
+      // If we have a target datetime, calculate countdown
+      if (parsedTarget && !isNaN(parsedTarget.getTime())) {
+        const now = new Date();
+        currentElapsed = Math.floor((parsedTarget - now) / 1000);
+      } else if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
         // Use UTC time to avoid timezone issues
         const now = new Date();
         const elapsedSinceStart = Math.floor((now - parsedStartTime) / 1000);
@@ -174,6 +223,9 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
   const initialOffsetRef = useRef(initialOffset);
   const lastStartTimeRef = useRef(lastStartTime);
   const isRunningRef = useRef(isRunning);
+  const targetDateTimeRef = useRef(targetDateTime);
+  const socketRef = useRef(socket);
+  const projectIdRef = useRef(projectId);
   const onTimeUpdateRef = useRef(onTimeUpdate);
 
   // Initialize ref immediately
@@ -184,15 +236,22 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     initialOffsetRef.current = initialOffset;
     lastStartTimeRef.current = lastStartTime;
     isRunningRef.current = isRunning;
+    targetDateTimeRef.current = targetDateTime;
+    socketRef.current = socket;
+    projectIdRef.current = projectId;
     onTimeUpdateRef.current = onTimeUpdate;
-  }, [initialOffset, lastStartTime, isRunning, onTimeUpdate]);
+  }, [initialOffset, lastStartTime, isRunning, targetDateTime, socket, projectId, onTimeUpdate]);
 
   // Local counting logic - runs when isRunning or lastStartTime changes
   useEffect(() => {
     console.log('Timer effect running with:', { isRunning, lastStartTime, initialOffset });
     
-    // Check refs instead of state
-    if (!isRunningRef.current || !lastStartTimeRef.current) {
+    // If we have a target datetime, always run the interval (countdown mode)
+    // Otherwise, check if timer is running
+    const hasTarget = targetDateTimeRef.current && targetDateTimeRef.current instanceof Date && !isNaN(targetDateTimeRef.current.getTime());
+    const shouldRun = hasTarget || (isRunningRef.current && lastStartTimeRef.current);
+    
+    if (!shouldRun) {
       console.log('Timer not ready - isRunning:', isRunningRef.current, 'lastStartTime:', lastStartTimeRef.current);
       if (!isRunningRef.current) {
         const validOffset = typeof initialOffsetRef.current === 'number' && !isNaN(initialOffsetRef.current) 
@@ -211,6 +270,16 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     // Calculate elapsed time using refs (always up-to-date)
     const calculateElapsed = () => {
       const now = new Date();
+      const currentTarget = targetDateTimeRef.current;
+      
+      // If we have a target datetime, calculate countdown
+      if (currentTarget && currentTarget instanceof Date && !isNaN(currentTarget.getTime())) {
+        const diffSeconds = Math.floor((currentTarget - now) / 1000);
+        // If countdown reached zero or passed, return 0
+        return Math.max(0, diffSeconds);
+      }
+      
+      // Otherwise, calculate normal elapsed time
       const currentStartTime = lastStartTimeRef.current;
       const currentOffset = typeof initialOffsetRef.current === 'number' && !isNaN(initialOffsetRef.current) 
         ? initialOffsetRef.current 
@@ -244,9 +313,19 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     // Update every second
     const interval = setInterval(() => {
       const currentElapsed = calculateElapsed();
-      console.log('Interval - calculated elapsed:', currentElapsed, 'offset:', initialOffsetRef.current, 'startTime:', lastStartTimeRef.current);
+      console.log('Interval - calculated elapsed:', currentElapsed, 'offset:', initialOffsetRef.current, 'startTime:', lastStartTimeRef.current, 'target:', targetDateTimeRef.current);
       // Always update state to trigger re-render
       setSecondsElapsed(currentElapsed);
+      
+      // If countdown reached zero or passed, stop the timer
+      const currentTarget = targetDateTimeRef.current;
+      const currentSocket = socketRef.current;
+      if (currentTarget && currentTarget instanceof Date && !isNaN(currentTarget.getTime())) {
+        if (currentElapsed <= 0 && isRunningRef.current && currentSocket) {
+          console.log('Countdown reached zero, stopping timer');
+          currentSocket.emit('requestStop', { project_id: projectIdRef.current });
+        }
+      }
       
       // Always notify parent component using ref to get latest callback
       const callback = onTimeUpdateRef.current;
@@ -262,7 +341,7 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       }
     }, 1000);
 
-    console.log('Interval created, dependencies:', { isRunning, lastStartTime, initialOffset });
+    console.log('Interval created, dependencies:', { isRunning, lastStartTime, initialOffset, targetDateTime });
 
     // Cleanup function
     return () => {
@@ -270,7 +349,7 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRunning, lastStartTime?.getTime(), initialOffset]); // Use timestamp to avoid Date object reference issues
+  }, [isRunning, lastStartTime?.getTime(), initialOffset, targetDateTime?.getTime()]); // Include targetDateTime so interval is recreated when target changes
 
   // Handle start button click
   const handleStart = useCallback(() => {
@@ -344,13 +423,52 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     socket.emit('requestSetTime', { project_id: projectId, total_seconds: totalSeconds });
   }, [socket, projectId, isManager, isConnected]);
 
+  // Handle set target time
+  const handleSetTarget = useCallback((targetDateTimeString) => {
+    if (!isManager) {
+      console.warn('Only managers can set the target time');
+      return;
+    }
+    if (!socket) {
+      console.error('Socket not initialized. Cannot set target time.');
+      return;
+    }
+    if (!isConnected && !socket.connected) {
+      console.error('Socket not connected. Cannot set target time.');
+      return;
+    }
+    console.log('Emitting requestSetTarget for project:', projectId, 'targetDateTime:', targetDateTimeString);
+    socket.emit('requestSetTarget', { project_id: projectId, target_datetime: targetDateTimeString });
+  }, [socket, projectId, isManager, isConnected]);
+
+  // Handle clear target time
+  const handleClearTarget = useCallback(() => {
+    if (!isManager) {
+      console.warn('Only managers can clear the target time');
+      return;
+    }
+    if (!socket) {
+      console.error('Socket not initialized. Cannot clear target time.');
+      return;
+    }
+    if (!isConnected && !socket.connected) {
+      console.error('Socket not connected. Cannot clear target time.');
+      return;
+    }
+    console.log('Emitting requestClearTarget for project:', projectId);
+    socket.emit('requestClearTarget', { project_id: projectId });
+  }, [socket, projectId, isManager, isConnected]);
+
   return {
     secondsElapsed,
     isRunning,
     formattedTime: formatTime(secondsElapsed),
+    targetDateTime,
     handleStart,
     handleStop,
     handleSetTime,
+    handleSetTarget,
+    handleClearTarget,
     isConnected // Expose connection status for debugging
   };
 };

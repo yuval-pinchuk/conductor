@@ -429,6 +429,21 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   }, [isManager, fetchPendingChanges]);
 
+  // Sync targetDateTime from timer (must be before any conditional returns)
+  useEffect(() => {
+    if (timer.targetDateTime !== undefined) {
+      if (timer.targetDateTime) {
+        setTargetDateTime(timer.targetDateTime.toISOString().slice(0, 16)); // Convert to datetime-local format
+        setIsUsingTargetTime(true);
+        setIsCountDown(true);
+      } else {
+        setTargetDateTime('');
+        setIsUsingTargetTime(false);
+        setIsCountDown(false);
+      }
+    }
+  }, [timer.targetDateTime]);
+
   if (isLoadingData) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
@@ -481,21 +496,26 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
   const handleSetTargetClockTime = async (targetTime) => {
     if (!isManager) return;
-    setTargetDateTime(targetTime);
-    setIsUsingTargetTime(true);
-    setIsCountDown(true);
-    // Note: Timer running state is managed by CollaborativeTimer via Socket.IO
-    // For target time functionality, we may need to extend the Socket.IO timer
-    await api.createClockCommand(project.id, 'set_target', { target_datetime: targetTime });
+    if (timer.handleSetTarget) {
+      timer.handleSetTarget(targetTime);
+      setTargetDateTime(targetTime);
+      setIsUsingTargetTime(true);
+      setIsCountDown(true);
+    } else {
+      console.error('Timer handleSetTarget not available');
+    }
   };
 
   const handleClearTargetClockTime = async () => {
     if (!isManager) return;
-    setTargetDateTime('');
-    setIsUsingTargetTime(false);
-    setIsCountDown(false);
-    // Note: Timer running state is managed by CollaborativeTimer via Socket.IO
-    await api.createClockCommand(project.id, 'clear_target', {});
+    if (timer.handleClearTarget) {
+      timer.handleClearTarget();
+      setTargetDateTime('');
+      setIsUsingTargetTime(false);
+      setIsCountDown(false);
+    } else {
+      console.error('Timer handleClearTarget not available');
+    }
   };
 
   return (
