@@ -4,11 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="fd9e748f-35b9-47eb-9b99-facc2e1b0337" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/backend/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/components/CollaborativeTimer.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/CollaborativeTimer.jsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/components/MainScreen.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/MainScreen.js" afterDir="false" />
-    </list>
+    <list default="true" id="fd9e748f-35b9-47eb-9b99-facc2e1b0337" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

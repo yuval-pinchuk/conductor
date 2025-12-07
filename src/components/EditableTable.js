@@ -830,7 +830,20 @@ const EditableTable = ({
                     transition: 'background-color 0.2s ease',
                   };
 
-                  if (isUserRoleMatch) {
+                  // Special case: user's row that is overdue - use orange/red to make it very visible
+                  if (isUserRoleMatch && shouldHighlightOverdue) {
+                    const overdueUserOverlay = 'rgba(255, 152, 0, 0.6)'; // Stronger orange background
+                    styles = {
+                      ...styles,
+                      backgroundColor: baseColor === 'transparent' ? overdueUserOverlay : overdueUserOverlay,
+                      boxShadow: 'inset 0 0 0 4px rgba(255, 87, 34, 1), 0 0 25px rgba(255, 152, 0, 1)',
+                      borderLeft: '8px solid #ff5722', // Thicker orange-red border
+                      borderRight: '4px solid rgba(255, 87, 34, 0.8)',
+                      borderTop: '2px solid rgba(255, 152, 0, 0.6)',
+                      borderBottom: '2px solid rgba(255, 152, 0, 0.6)',
+                    };
+                  } else if (isUserRoleMatch) {
+                    // User's row that is not overdue - blue highlight
                     const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
                     styles = {
                       ...styles,
@@ -838,10 +851,9 @@ const EditableTable = ({
                       boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
                       borderLeft: '4px solid #2196f3',
                     };
-                  }
-
-                  if (shouldHighlightOverdue) {
-                    const overdueOverlay = 'rgba(255, 235, 59, 0.4)'; // More highlighted yellow
+                  } else if (shouldHighlightOverdue) {
+                    // Overdue row that doesn't belong to user - yellow highlight
+                    const overdueOverlay = 'rgba(255, 235, 59, 0.4)';
                     styles = {
                       ...styles,
                       backgroundColor: styles.backgroundColor === 'transparent' ? overdueOverlay : styles.backgroundColor,
