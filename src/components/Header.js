@@ -32,9 +32,11 @@ const Header = ({
 }) => {
   const [isEditingClock, setIsEditingClock] = useState(false);
   const [tempClockInput, setTempClockInput] = useState(clockTime);
+  const [tempTargetDateTime, setTempTargetDateTime] = useState('');
     
   const handleClockEditStart = () => {
       setTempClockInput(clockTime);
+      setTempTargetDateTime(targetDateTime || '');
       setIsEditingClock(true);
   };
 
@@ -146,19 +148,41 @@ const Header = ({
                   type="datetime-local"
                   size="small"
                   label="Target Time"
-                  value={targetDateTime || ''}
+                  value={tempTargetDateTime || targetDateTime || ''}
                   onChange={(e) => {
-                    handleSetTargetClockTime(e.target.value);
-                    if (e.target.value) {
-                      setIsEditingClock(false);
-                    }
+                    setTempTargetDateTime(e.target.value);
                   }}
                   InputLabelProps={{ shrink: true }}
                   style={{ width: 210, backgroundColor: '#333' }}
                   inputProps={{ style: { color: 'white' } }}
                 />
+                <Button 
+                  size="small" 
+                  variant="contained" 
+                  color="primary"
+                  onClick={() => {
+                    if (tempTargetDateTime) {
+                      handleSetTargetClockTime(tempTargetDateTime);
+                    }
+                    setTempTargetDateTime('');
+                    setIsEditingClock(false);
+                  }}
+                  disabled={!tempTargetDateTime}
+                >
+                  Set
+                </Button>
+                <Button 
+                  size="small" 
+                  variant="outlined" 
+                  onClick={() => {
+                    setTempTargetDateTime('');
+                    setIsEditingClock(false);
+                  }}
+                >
+                  Cancel
+                </Button>
                 {isUsingTargetTime && (
-                  <Button size="small" variant="outlined" onClick={handleClearTargetClockTime}>
+                  <Button size="small" variant="outlined" color="error" onClick={handleClearTargetClockTime}>
                     Clear
                   </Button>
                 )}
