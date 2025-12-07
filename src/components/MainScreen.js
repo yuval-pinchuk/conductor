@@ -721,7 +721,7 @@ const processClockCommand = (command, data) => {
                               case 'row_delete':
                                 return `מחיקת שורה #${changesData.row_id || 'N/A'}`;
                               case 'version':
-                                return `שינוי גרסה: ${changesData.old_version || 'N/A'} → ${changesData.new_version || 'N/A'}`;
+                                return `שינוי גרסה: ${changesData.new_version || 'N/A'} → ${changesData.old_version || 'N/A'}`;
                               case 'role_add':
                                 return `הוספת תפקיד: ${changesData.role || 'N/A'}`;
                               case 'role_delete':
@@ -757,32 +757,32 @@ const processClockCommand = (command, data) => {
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     {oldData.role !== newData.role && (
                                       <Typography variant="body2">
-                                        <strong>תפקיד:</strong> <span style={{ color: '#ff6b6b' }}>{oldData.role}</span> → <span style={{ color: '#51cf66' }}>{newData.role}</span>
+                                        <strong>תפקיד:</strong> <span style={{ color: '#51cf66' }}>{newData.role}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.role}</span>
                                       </Typography>
                                     )}
                                     {oldData.time !== newData.time && (
                                       <Typography variant="body2">
-                                        <strong>זמן:</strong> <span style={{ color: '#ff6b6b' }}>{oldData.time}</span> → <span style={{ color: '#51cf66' }}>{newData.time}</span>
+                                        <strong>זמן:</strong> <span style={{ color: '#51cf66' }}>{newData.time}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.time}</span>
                                       </Typography>
                                     )}
                                     {oldData.duration !== newData.duration && (
                                       <Typography variant="body2">
-                                        <strong>משך:</strong> <span style={{ color: '#ff6b6b' }}>{oldData.duration}</span> → <span style={{ color: '#51cf66' }}>{newData.duration}</span>
+                                        <strong>משך:</strong> <span style={{ color: '#51cf66' }}>{newData.duration}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.duration}</span>
                                       </Typography>
                                     )}
                                     {oldData.description !== newData.description && (
                                       <Typography variant="body2">
-                                        <strong>תיאור:</strong> <span style={{ color: '#ff6b6b' }}>{oldData.description || '(ריק)'}</span> → <span style={{ color: '#51cf66' }}>{newData.description || '(ריק)'}</span>
+                                        <strong>תיאור:</strong> <span style={{ color: '#51cf66' }}>{newData.description || '(ריק)'}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.description || '(ריק)'}</span>
                                       </Typography>
                                     )}
                                     {oldData.script !== newData.script && (
                                       <Typography variant="body2">
-                                        <strong>סקריפט:</strong> <span style={{ color: '#ff6b6b' }}>{oldData.script || '(ריק)'}</span> → <span style={{ color: '#51cf66' }}>{newData.script || '(ריק)'}</span>
+                                        <strong>סקריפט:</strong> <span style={{ color: '#51cf66' }}>{newData.script || '(ריק)'}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.script || '(ריק)'}</span>
                                       </Typography>
                                     )}
                                     {oldData.status !== newData.status && (
                                       <Typography variant="body2">
-                                        <strong>סטטוס:</strong> <span style={{ color: '#ff6b6b' }}>{oldData.status}</span> → <span style={{ color: '#51cf66' }}>{newData.status}</span>
+                                        <strong>סטטוס:</strong> <span style={{ color: '#51cf66' }}>{newData.status}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.status}</span>
                                       </Typography>
                                     )}
                                   </Box>
@@ -831,17 +831,17 @@ const processClockCommand = (command, data) => {
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     {oldScript.name !== newScript.name && (
                                       <Typography variant="body2">
-                                        <strong>שם:</strong> <span style={{ color: '#ff6b6b' }}>{oldScript.name}</span> → <span style={{ color: '#51cf66' }}>{newScript.name}</span>
+                                        <strong>שם:</strong> <span style={{ color: '#51cf66' }}>{newScript.name}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.name}</span>
                                       </Typography>
                                     )}
                                     {oldScript.path !== newScript.path && (
                                       <Typography variant="body2">
-                                        <strong>נתיב:</strong> <span style={{ color: '#ff6b6b' }}>{oldScript.path}</span> → <span style={{ color: '#51cf66' }}>{newScript.path}</span>
+                                        <strong>נתיב:</strong> <span style={{ color: '#51cf66' }}>{newScript.path}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.path}</span>
                                       </Typography>
                                     )}
                                     {oldScript.status !== newScript.status && (
                                       <Typography variant="body2">
-                                        <strong>סטטוס:</strong> <span style={{ color: '#ff6b6b' }}>{oldScript.status ? 'פעיל' : 'לא פעיל'}</span> → <span style={{ color: '#51cf66' }}>{newScript.status ? 'פעיל' : 'לא פעיל'}</span>
+                                        <strong>סטטוס:</strong> <span style={{ color: '#51cf66' }}>{newScript.status ? 'פעיל' : 'לא פעיל'}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.status ? 'פעיל' : 'לא פעיל'}</span>
                                       </Typography>
                                     )}
                                   </Box>
