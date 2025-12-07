@@ -18,6 +18,9 @@
   `clock_command` VARCHAR(50) NULL,
   `clock_command_data` TEXT NULL,
   `clock_command_timestamp` DATETIME NULL,
+  `timer_is_running` TINYINT(1) NOT NULL DEFAULT 0,
+  `timer_last_start_time` DATETIME NULL,
+  `timer_initial_offset` INT NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
  ) ENGINE=InnoDB;

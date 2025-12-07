@@ -66,6 +66,25 @@ def get_clock_command(project_id):
     }), 200
 
 
+@api.route('/api/timer/<int:project_id>', methods=['GET'])
+def get_timer_state(project_id):
+    """Get the current persistent timer state for Socket.IO-based timer"""
+    project = Project.query.get_or_404(project_id)
+    
+    # Calculate current elapsed time if timer is running
+    seconds_elapsed = project.timer_initial_offset
+    if project.timer_is_running and project.timer_last_start_time:
+        elapsed_since_start = int((datetime.utcnow() - project.timer_last_start_time).total_seconds())
+        seconds_elapsed += elapsed_since_start
+    
+    return jsonify({
+        'isRunning': project.timer_is_running,
+        'lastStartTime': (project.timer_last_start_time.isoformat() + 'Z') if project.timer_last_start_time else None,
+        'initialOffset': project.timer_initial_offset,
+        'secondsElapsed': seconds_elapsed
+    }), 200
+
+
 @api.route('/api/projects/<int:project_id>/clock-command/clear', methods=['POST'])
 def clear_clock_command(project_id):
     """Clear the clock command after it's been processed"""

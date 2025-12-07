@@ -19,6 +19,10 @@ class Project(db.Model):
     clock_command = db.Column(db.String(50), nullable=True)  # 'set_time', 'start', 'stop', 'set_target', 'clear_target'
     clock_command_data = db.Column(db.Text, nullable=True)  # JSON string with command parameters
     clock_command_timestamp = db.Column(db.DateTime, nullable=True)
+    # Timer fields for Socket.IO-based collaborative timer
+    timer_is_running = db.Column(db.Boolean, default=False, nullable=False)
+    timer_last_start_time = db.Column(db.DateTime, nullable=True)  # Server timestamp when timer was started
+    timer_initial_offset = db.Column(db.Integer, default=0, nullable=False)  # Total seconds elapsed before current run
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

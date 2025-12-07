@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
+import useCollaborativeTimer from './CollaborativeTimer';
 import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, Accordion, AccordionSummary, AccordionDetails, Divider, Chip } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
@@ -71,68 +72,33 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   
-  // Clock State Management - pure front-end state
+  // Timer state - managed by CollaborativeTimer hook
   const [totalSeconds, setTotalSeconds] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
+  
+  // Memoize the callback to prevent infinite loops
+  // Always update - don't check if value changed (React will optimize)
+  const handleTimeUpdate = useCallback((seconds) => {
+    console.log('handleTimeUpdate called with:', seconds);
+    // Always update - the value should be different every second
+    setTotalSeconds(seconds);
+    console.log('Updated totalSeconds to:', seconds);
+  }, []);
+  
+  const timer = useCollaborativeTimer({
+    projectId: project.id,
+    isManager: isManager,
+    onTimeUpdate: handleTimeUpdate
+  });
+  
+  // Extract timer values
+  const isRunning = timer.isRunning;
+  
+  // Legacy clock state (kept for compatibility with existing code)
   const [isCountDown, setIsCountDown] = useState(false);
   const [targetDateTime, setTargetDateTime] = useState('');
   const [isUsingTargetTime, setIsUsingTargetTime] = useState(false);
-  const [lastProcessedCommandTimestamp, setLastProcessedCommandTimestamp] = useState(null);
   
-  // Use ref to track current time for accurate synchronization
-  const totalSecondsRef = React.useRef(0);
-  
-  // Keep ref in sync with state
-  React.useEffect(() => {
-    totalSecondsRef.current = totalSeconds;
-  }, [totalSeconds]);
-
-const processClockCommand = (command, data) => {
-    if (!command) return;
-    
-    const commandTimestamp = project.clock_command_timestamp;
-    if (commandTimestamp && lastProcessedCommandTimestamp) {
-      const commandTime = new Date(commandTimestamp).getTime();
-      const lastProcessedTime = new Date(lastProcessedCommandTimestamp).getTime();
-      if (commandTime <= lastProcessedTime) {
-        return; // Already processed this command
-      }
-    }
-    
-    setLastProcessedCommandTimestamp(commandTimestamp || new Date().toISOString());
-    
-    switch (command) {
-      case 'set_time':
-        if (data && data.total_seconds !== undefined) {
-          setTotalSeconds(data.total_seconds);
-          setIsRunning(false);
-          setIsCountDown(false);
-        }
-        break;
-      case 'start':
-        setIsRunning(true);
-        setIsCountDown(false);
-        break;
-      case 'stop':
-        setIsRunning(false);
-        break;
-      case 'set_target':
-        if (data && data.target_datetime) {
-          setTargetDateTime(data.target_datetime);
-          setIsUsingTargetTime(true);
-          setIsCountDown(true);
-          setIsRunning(true);
-        }
-        break;
-      case 'clear_target':
-        setTargetDateTime('');
-        setIsUsingTargetTime(false);
-        setIsCountDown(false);
-        break;
-      default:
-        break;
-    }
-  };
+  // Note: Old clock command processing removed - now using Socket.IO via CollaborativeTimer
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -247,17 +213,14 @@ const processClockCommand = (command, data) => {
       const loginsData = await api.getActiveLogins(project.id);
       setActiveLogins(loginsData);
       
-      // Process clock command if available
-      if (projectData.clock_command) {
-        const clockData = projectData.clock_command_data ? JSON.parse(projectData.clock_command_data) : {};
-        processClockCommand(projectData.clock_command, clockData);
-      }
+      // Clock state is now managed by CollaborativeTimer via Socket.IO
+      // No need to process clock commands here
     } catch (error) {
       console.error('Failed to load project data', error);
       setDataError(error.message || 'Failed to load project data');
     } finally {
-      setIsLoadingData(false);
-    }
+        setIsLoadingData(false);
+      }
   }, [project.id]);
 
   // Load data on mount
@@ -265,46 +228,16 @@ const processClockCommand = (command, data) => {
     loadProjectData();
   }, [loadProjectData]);
 
-  // Clock ticker
-  useInterval(() => {
-    if (isRunning) {
-      if (isCountDown && isUsingTargetTime && targetDateTime) {
-        const targetTime = new Date(targetDateTime).getTime();
-        const now = Date.now();
-        const diffSeconds = Math.floor((targetTime - now) / 1000);
-        setTotalSeconds(diffSeconds);
-        if (diffSeconds <= 0) {
-          setIsRunning(false);
-        }
-      } else {
-        setTotalSeconds(prev => prev + 1);
-      }
-    }
-  }, isRunning ? 1000 : null);
-
-  // Sync clock with server periodically
-  useInterval(() => {
-    if (!isRunning) {
-      api.getClockCommand(project.id)
-        .then(response => {
-          if (response.command) {
-            const clockData = response.data ? JSON.parse(response.data) : {};
-            processClockCommand(response.command, clockData);
-          }
-        })
-        .catch(err => {
-          // Silently fail
-        });
-    }
-  }, 2000);
+  // Clock ticker removed - now handled by CollaborativeTimer component via Socket.IO
+  // The timer updates automatically based on server state
 
   // Poll for project data updates (when not editing)
   // This ensures users see changes made by managers or other users
   useInterval(() => {
     if (!isEditing && !isLoadingData) {
       loadProjectData(false).catch(err => {
-        // Silently fail - polling is not critical
-      });
+          // Silently fail - polling is not critical
+        });
     }
   }, 5000); // Poll every 5 seconds
 
@@ -504,7 +437,8 @@ const processClockCommand = (command, data) => {
     );
   }
 
-  // Clock handlers
+  // Clock handlers - use CollaborativeTimer
+  // Use totalSeconds directly since it's updated via onTimeUpdate callback
   const clockTime = formatTime(totalSeconds);
   const handleSetClockTime = async (timeString) => {
     if (!isManager) return;
@@ -516,17 +450,33 @@ const processClockCommand = (command, data) => {
       const minutes = parseInt(match[3], 10);
       const seconds = parseInt(match[4], 10);
       const totalSecs = sign * (hours * 3600 + minutes * 60 + seconds);
-      setTotalSeconds(totalSecs);
-      totalSecondsRef.current = totalSecs;
-      await api.createClockCommand(project.id, 'set_time', { total_seconds: totalSecs });
+      // Use Socket.IO to set the time
+      if (timer.handleSetTime) {
+        timer.handleSetTime(totalSecs);
+      } else {
+        console.error('Timer handleSetTime not available');
+      }
     }
   };
 
-  const handleToggleClock = async () => {
-    if (!isManager) return;
-    const newRunningState = !isRunning;
-    setIsRunning(newRunningState);
-    await api.createClockCommand(project.id, newRunningState ? 'start' : 'stop', {});
+  const handleToggleClock = () => {
+    if (!isManager) {
+      console.warn('Only managers can toggle the clock');
+      return;
+    }
+    console.log('handleToggleClock called, timer.isRunning:', timer.isRunning, 'timer.isConnected:', timer.isConnected);
+    if (!timer.isConnected) {
+      console.error('Timer socket not connected. Please wait for connection or check backend server.');
+      alert('Timer not connected. Please ensure the backend server is running and try again.');
+      return;
+    }
+    if (timer.isRunning) {
+      console.log('Calling timer.handleStop()');
+      timer.handleStop();
+    } else {
+      console.log('Calling timer.handleStart()');
+      timer.handleStart();
+    }
   };
 
   const handleSetTargetClockTime = async (targetTime) => {
@@ -534,7 +484,8 @@ const processClockCommand = (command, data) => {
     setTargetDateTime(targetTime);
     setIsUsingTargetTime(true);
     setIsCountDown(true);
-    setIsRunning(true);
+    // Note: Timer running state is managed by CollaborativeTimer via Socket.IO
+    // For target time functionality, we may need to extend the Socket.IO timer
     await api.createClockCommand(project.id, 'set_target', { target_datetime: targetTime });
   };
 
@@ -543,7 +494,7 @@ const processClockCommand = (command, data) => {
     setTargetDateTime('');
     setIsUsingTargetTime(false);
     setIsCountDown(false);
-    setIsRunning(false);
+    // Note: Timer running state is managed by CollaborativeTimer via Socket.IO
     await api.createClockCommand(project.id, 'clear_target', {});
   };
 
@@ -591,14 +542,14 @@ const processClockCommand = (command, data) => {
           periodicScripts={periodicScripts}
           setPeriodicScripts={setPeriodicScripts}
           currentClockSeconds={totalSeconds}
-          isClockRunning={isRunning}
+          isClockRunning={timer.isRunning}
           onRowStatusChange={handleRowStatusChange}
           onRunRowScript={handleRunRowScript}
           activeLogins={activeLogins}
           projectId={project.id}
           userName={name}
         />
-
+        
         <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>
           <Button
             variant="outlined"
@@ -609,16 +560,16 @@ const processClockCommand = (command, data) => {
           </Button>
           
           <Box sx={{ display: 'flex', gap: 2, direction: 'rtl' }}>
-            {isManager && (
-              <Button
-                variant="contained"
-                color="error"
+          {isManager && (
+            <Button
+              variant="contained"
+              color="error"
                 onClick={handleDeleteProject}
-                disabled={isDeletingProject}
-              >
-                {isDeletingProject ? 'Deleting...' : 'Delete Project'}
-              </Button>
-            )}
+              disabled={isDeletingProject}
+            >
+              {isDeletingProject ? 'Deleting...' : 'Delete Project'}
+            </Button>
+          )}
             
             {isEditing && (
               <>
@@ -688,20 +639,20 @@ const processClockCommand = (command, data) => {
                     const totalChanges = changes.length;
                     const processedCount = changes.filter(c => c.status !== 'pending').length;
                     const pendingCount = totalChanges - processedCount;
-                    
-                    return (
+                  
+                  return (
                       <Box key={submissionId} sx={{ mb: 4, p: 2, border: '1px solid #555', borderRadius: 1, bgcolor: '#1e1e1e' }}>
                         <Box sx={{ mb: 2, pb: 2, borderBottom: '1px solid #555' }}>
-                          <Typography variant="h6" gutterBottom>
+                      <Typography variant="h6" gutterBottom>
                             בקשה מ-{firstChange.submitted_by} ({firstChange.submitted_by_role})
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
                             תאריך: {new Date(firstChange.created_at).toLocaleString('he-IL')}
-                          </Typography>
+                      </Typography>
                           <Typography variant="body2" color="text.secondary">
                             התקדמות: {processedCount} מתוך {totalChanges} שינויים עובדו
                           </Typography>
-                        </Box>
+                            </Box>
                         
                         {changes.map((change) => {
                           if (change.status !== 'pending') {
@@ -741,51 +692,51 @@ const processClockCommand = (command, data) => {
                             switch (change.change_type) {
                               case 'row_add':
                                 const rowData = changesData.row_data || {};
-                                return (
+                                          return (
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     <Typography variant="body2"><strong>תפקיד:</strong> {rowData.role || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>זמן:</strong> {rowData.time || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>משך:</strong> {rowData.duration || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>תיאור:</strong> {rowData.description || '(ריק)'}</Typography>
                                     {rowData.script && <Typography variant="body2"><strong>סקריפט:</strong> {rowData.script}</Typography>}
-                                  </Box>
+                                                  </Box>
                                 );
                               case 'row_update':
                                 const oldData = changesData.old_data || {};
                                 const newData = changesData.new_data || {};
-                                return (
+                                          return (
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     {oldData.role !== newData.role && (
                                       <Typography variant="body2">
                                         <strong>תפקיד:</strong> <span style={{ color: '#51cf66' }}>{newData.role}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.role}</span>
-                                      </Typography>
-                                    )}
+                                                    </Typography>
+                                                  )}
                                     {oldData.time !== newData.time && (
                                       <Typography variant="body2">
                                         <strong>זמן:</strong> <span style={{ color: '#51cf66' }}>{newData.time}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.time}</span>
-                                      </Typography>
-                                    )}
+                                                    </Typography>
+                                                  )}
                                     {oldData.duration !== newData.duration && (
                                       <Typography variant="body2">
                                         <strong>משך:</strong> <span style={{ color: '#51cf66' }}>{newData.duration}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.duration}</span>
-                                      </Typography>
-                                    )}
+                                                    </Typography>
+                                                  )}
                                     {oldData.description !== newData.description && (
                                       <Typography variant="body2">
                                         <strong>תיאור:</strong> <span style={{ color: '#51cf66' }}>{newData.description || '(ריק)'}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.description || '(ריק)'}</span>
-                                      </Typography>
-                                    )}
+                                                    </Typography>
+                                                  )}
                                     {oldData.script !== newData.script && (
                                       <Typography variant="body2">
                                         <strong>סקריפט:</strong> <span style={{ color: '#51cf66' }}>{newData.script || '(ריק)'}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.script || '(ריק)'}</span>
-                                      </Typography>
-                                    )}
+                                                    </Typography>
+                                                  )}
                                     {oldData.status !== newData.status && (
                                       <Typography variant="body2">
                                         <strong>סטטוס:</strong> <span style={{ color: '#51cf66' }}>{newData.status}</span> → <span style={{ color: '#ff6b6b' }}>{oldData.status}</span>
-                                      </Typography>
-                                    )}
-                                  </Box>
+                                                    </Typography>
+                                                  )}
+                                                  </Box>
                                 );
                               case 'row_delete':
                                 const delRowData = changesData.row_data || {};
@@ -795,17 +746,17 @@ const processClockCommand = (command, data) => {
                                     <Typography variant="body2"><strong>זמן:</strong> {delRowData.time || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>משך:</strong> {delRowData.duration || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>תיאור:</strong> {delRowData.description || '(ריק)'}</Typography>
-                                  </Box>
+                                      </Box>
                                 );
                               case 'version':
-                                return (
+                                          return (
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     <Typography variant="body2">
                                       <strong>נוכחי:</strong> <span style={{ color: '#ff6b6b' }}>{changesData.old_version || 'N/A'}</span>
-                                    </Typography>
+                                                </Typography>
                                     <Typography variant="body2">
                                       <strong>חדש:</strong> <span style={{ color: '#51cf66' }}>{changesData.new_version || 'N/A'}</span>
-                                    </Typography>
+                                                  </Typography>
                                   </Box>
                                 );
                               case 'role_add':
@@ -813,7 +764,7 @@ const processClockCommand = (command, data) => {
                                 return (
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     <Typography variant="body2"><strong>תפקיד:</strong> {changesData.role || 'N/A'}</Typography>
-                                  </Box>
+                                                  </Box>
                                 );
                               case 'script_add':
                                 const addScriptData = changesData.script_data || {};
@@ -822,7 +773,7 @@ const processClockCommand = (command, data) => {
                                     <Typography variant="body2"><strong>שם:</strong> {addScriptData.name || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>נתיב:</strong> {addScriptData.path || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>סטטוס:</strong> {addScriptData.status ? 'פעיל' : 'לא פעיל'}</Typography>
-                                  </Box>
+                                      </Box>
                                 );
                               case 'script_update':
                                 const oldScript = changesData.old_data || {};
@@ -832,12 +783,12 @@ const processClockCommand = (command, data) => {
                                     {oldScript.name !== newScript.name && (
                                       <Typography variant="body2">
                                         <strong>שם:</strong> <span style={{ color: '#51cf66' }}>{newScript.name}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.name}</span>
-                                      </Typography>
+                                </Typography>
                                     )}
                                     {oldScript.path !== newScript.path && (
                                       <Typography variant="body2">
                                         <strong>נתיב:</strong> <span style={{ color: '#51cf66' }}>{newScript.path}</span> → <span style={{ color: '#ff6b6b' }}>{oldScript.path}</span>
-                                      </Typography>
+                                </Typography>
                                     )}
                                     {oldScript.status !== newScript.status && (
                                       <Typography variant="body2">
@@ -852,7 +803,7 @@ const processClockCommand = (command, data) => {
                                   <Box sx={{ direction: 'rtl', mt: 1 }}>
                                     <Typography variant="body2"><strong>שם:</strong> {delScriptData.name || 'N/A'}</Typography>
                                     <Typography variant="body2"><strong>נתיב:</strong> {delScriptData.path || 'N/A'}</Typography>
-                                  </Box>
+                              </Box>
                                 );
                               default:
                                 return null;
@@ -863,29 +814,29 @@ const processClockCommand = (command, data) => {
                             <Box key={change.id} sx={{ mb: 2, p: 2, border: '1px solid #444', borderRadius: 1, bgcolor: '#2d2d2d' }}>
                               <Typography variant="subtitle1" gutterBottom>
                                 {getChangeDescription()}
-                              </Typography>
+                                </Typography>
                               {getChangeDetails()}
-                              <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
-                                <Button
-                                  variant="contained"
-                                  color="success"
+                      <Box sx={{ display: 'flex', gap: 1, mt: 2, direction: 'rtl', justifyContent: 'flex-end' }}>
+                        <Button
+                          variant="contained"
+                          color="success"
                                   size="small"
-                                  onClick={() => handleAcceptPendingChange(change.id)}
-                                >
-                                  אישור
-                                </Button>
-                                <Button
-                                  variant="contained"
-                                  color="error"
+                          onClick={() => handleAcceptPendingChange(change.id)}
+                        >
+                          אישור
+                        </Button>
+                        <Button
+                          variant="contained"
+                          color="error"
                                   size="small"
-                                  onClick={() => handleDeclinePendingChange(change.id)}
-                                >
-                                  דחייה
-                                </Button>
-                              </Box>
-                            </Box>
-                          );
-                        })}
+                          onClick={() => handleDeclinePendingChange(change.id)}
+                        >
+                          דחייה
+                        </Button>
+                      </Box>
+                    </Box>
+                  );
+                })}
                       </Box>
                     );
                   });
