@@ -58,9 +58,9 @@ const Header = ({
   };
   
   // We only pass the numeric part to the TextField
-  const displayValue = currentVersion.startsWith('v') 
+  const displayValue = currentVersion && currentVersion.startsWith('v') 
                         ? currentVersion.substring(1) 
-                        : currentVersion;
+                        : (currentVersion || '');
 
   return (
     <AppBar position="static">

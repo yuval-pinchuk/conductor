@@ -105,9 +105,10 @@ CREATE TABLE `users` (
 CREATE TABLE `pending_changes` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `project_id` INT NOT NULL,
+  `submission_id` VARCHAR(255) NOT NULL, -- Groups changes from the same submission
   `submitted_by` VARCHAR(255) NOT NULL,
   `submitted_by_role` VARCHAR(100) NOT NULL,
-  `change_type` VARCHAR(50) NOT NULL, -- 'table_data', 'version', 'periodic_scripts', 'all'
+  `change_type` VARCHAR(50) NOT NULL, -- 'row_add', 'row_update', 'row_delete', 'version', 'role_add', 'role_delete', 'script_add', 'script_update', 'script_delete'
   `changes_data` TEXT NOT NULL, -- JSON string with the changes
   `status` VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'accepted', 'declined'
   `reviewed_by` VARCHAR(255) NULL,
@@ -115,7 +116,8 @@ CREATE TABLE `pending_changes` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT `fk_pending_changes_project`
     FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
-    ON DELETE CASCADE
+    ON DELETE CASCADE,
+  INDEX `idx_submission_id` (`submission_id`)
 ) ENGINE=InnoDB;
  
  -- Optional seed data (comment out if not needed)

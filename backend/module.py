@@ -184,9 +184,10 @@ class PendingChange(db.Model):
     
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False)
+    submission_id = db.Column(db.String(255), nullable=False, index=True)  # Groups changes from the same submission
     submitted_by = db.Column(db.String(255), nullable=False)
     submitted_by_role = db.Column(db.String(100), nullable=False)
-    change_type = db.Column(db.String(50), nullable=False)  # 'table_data', 'version', 'periodic_scripts', 'all'
+    change_type = db.Column(db.String(50), nullable=False)  # 'row_add', 'row_update', 'row_delete', 'version', 'role_add', 'role_delete', 'script_add', 'script_update', 'script_delete'
     changes_data = db.Column(db.Text, nullable=False)  # JSON string
     status = db.Column(db.String(20), nullable=False, default='pending')  # 'pending', 'accepted', 'declined'
     reviewed_by = db.Column(db.String(255), nullable=True)
@@ -197,6 +198,7 @@ class PendingChange(db.Model):
         return {
             'id': self.id,
             'project_id': self.project_id,
+            'submission_id': self.submission_id,
             'submitted_by': self.submitted_by,
             'submitted_by_role': self.submitted_by_role,
             'change_type': self.change_type,

@@ -18,9 +18,10 @@ import { api } from '../api/conductorApi';
 
 // Helper for time input with +/-
 const TimeInput = ({ value, onChange, format }) => {
-  const initialTime = value.startsWith('+') || value.startsWith('-') ? value.substring(1) : value;
+  const safeValue = value || '';
+  const initialTime = safeValue.startsWith('+') || safeValue.startsWith('-') ? safeValue.substring(1) : safeValue;
   const [time, setTime] = useState(initialTime);
-  const [isNegative, setIsNegative] = useState(value.startsWith('-'));
+  const [isNegative, setIsNegative] = useState(safeValue.startsWith('-'));
   
   // Regex for hh:mm:ss or mm:ss structure
   const HHMMSS_STRICT_REGEX = /^[0-9]{2}:[0-5][0-9]:[0-5][0-9]$/; 
