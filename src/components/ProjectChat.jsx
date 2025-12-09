@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 
-const ProjectChat = ({ projectId, userId, userRole, onNewMessage }) => {
+const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = true }) => {
   // State Management
   const [socket, setSocket] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -13,54 +13,159 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage }) => {
   
   // Ref for messages container to auto-scroll
   const messagesEndRef = useRef(null);
+  // Ref to store socket for cleanup
+  const socketRef = useRef(null);
 
-  // Part 2: Connection and Real-Time Listeners
+  // Socket URL: Define const SOCKET_URL
+  const SOCKET_URL = 'http://localhost:5000';
+
+  // Part 2 & 3: Data Flow within loadChatData
   useEffect(() => {
-    // Connection: Establish Socket.IO connection
-    const newSocket = io(API_BASE_URL, {
-      transports: ['websocket', 'polling']
-    });
-
-    // Socket Storage: Store the created socket object
-    setSocket(newSocket);
-
-    // Connection event handlers
-    newSocket.on('connect', () => {
-      setIsConnected(true);
-      // Join the project room
-      newSocket.emit('join_chat_room', { project_id: projectId });
-    });
-
-    newSocket.on('disconnect', () => {
-      setIsConnected(false);
-    });
-
-    // Receive Listener: Set up listener for receiveMessage event
-    newSocket.on('receiveMessage', (data) => {
-      // Update messages state by appending the new message object
-      const newMessage = {
-        user: data.user || data.userId || 'Unknown',
-        userName: data.userName || data.user || data.userId || 'Unknown',
-        userRole: data.userRole || data.role || 'Unknown',
-        message: data.message,
-        timestamp: data.timestamp || new Date().toISOString()
-      };
-      setMessages(prevMessages => {
-        const updated = [...prevMessages, newMessage];
-        // Notify parent about new message (for unread count)
-        if (onNewMessage) {
-          onNewMessage(updated.length - 1);
+    // Define loadChatData function that encapsulates all setup logic
+    const loadChatData = async () => {
+      try {
+        // Initial History Fetch (Persistence): Use fetch API to get historical messages
+        const response = await fetch(`${API_BASE_URL}/api/chat/history/${projectId}`);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch chat history: ${response.statusText}`);
         }
-        return updated;
-      });
-    });
+        
+        // Parse the JSON response
+        const historyData = await response.json();
+        
+        // Use setMessages to populate the state with the historical data
+        // Transform the API response to match the expected message format
+        const formattedMessages = historyData.map(msg => ({
+          id: msg.id, // Include ID for deduplication
+          user: msg.user || msg.userName || 'Unknown',
+          userName: msg.userName || msg.user || 'Unknown',
+          userRole: msg.userRole || 'Unknown',
+          message: msg.message || msg.content || '',
+          timestamp: msg.timestamp || new Date().toISOString()
+        }));
+        
+        setMessages(formattedMessages);
 
-    // Cleanup: Disconnect socket when component unmounts or projectId changes
+        // Socket Connection & Listeners: Establish Socket.IO connection after history is loaded
+        const newSocket = io(SOCKET_URL, {
+          transports: ['websocket', 'polling']
+        });
+
+        // Socket Storage: Store the created socket object
+        setSocket(newSocket);
+        socketRef.current = newSocket;
+
+        // Connection event handlers
+        newSocket.on('connect', () => {
+          setIsConnected(true);
+          // Join the project room
+          newSocket.emit('join_chat_room', { project_id: projectId });
+        });
+
+        newSocket.on('disconnect', () => {
+          setIsConnected(false);
+        });
+
+        // Receive Listener: Set up listener for receiveMessage event
+        // The handler must append the new message object to the existing messages array
+        newSocket.on('receiveMessage', (data) => {
+          // Update messages state by appending the new message object
+          const newMessage = {
+            id: data.id, // Include ID for deduplication
+            user: data.user || data.userId || 'Unknown',
+            userName: data.userName || data.user || data.userId || 'Unknown',
+            userRole: data.userRole || data.role || 'Unknown',
+            message: data.message,
+            timestamp: data.timestamp || new Date().toISOString()
+          };
+          setMessages(prevMessages => {
+            // Deduplication: Check if message already exists (by ID or by timestamp + user + message)
+            const isDuplicate = prevMessages.some(msg => {
+              if (data.id && msg.id === data.id) return true;
+              // Fallback: check by timestamp, user, and message content
+              return msg.timestamp === newMessage.timestamp &&
+                     msg.user === newMessage.user &&
+                     msg.message === newMessage.message;
+            });
+            
+            if (isDuplicate) {
+              return prevMessages; // Don't add duplicate
+            }
+            
+            const updated = [...prevMessages, newMessage];
+            // Notify parent about new message (for unread count)
+            // Only notify if this is a new message (not a duplicate we just filtered)
+            if (onNewMessage && !isDuplicate) {
+              onNewMessage(updated.length - 1, newMessage.id || data.id);
+            }
+            return updated;
+          });
+        });
+      } catch (error) {
+        console.error('Error loading chat data:', error);
+        // Even if history fetch fails, still try to connect to socket
+        const newSocket = io(SOCKET_URL, {
+          transports: ['websocket', 'polling']
+        });
+        setSocket(newSocket);
+        socketRef.current = newSocket;
+
+        newSocket.on('connect', () => {
+          setIsConnected(true);
+          newSocket.emit('join_chat_room', { project_id: projectId });
+        });
+
+        newSocket.on('disconnect', () => {
+          setIsConnected(false);
+        });
+
+        newSocket.on('receiveMessage', (data) => {
+          const newMessage = {
+            id: data.id, // Include ID for deduplication
+            user: data.user || data.userId || 'Unknown',
+            userName: data.userName || data.user || data.userId || 'Unknown',
+            userRole: data.userRole || data.role || 'Unknown',
+            message: data.message,
+            timestamp: data.timestamp || new Date().toISOString()
+          };
+          setMessages(prevMessages => {
+            // Deduplication: Check if message already exists (by ID or by timestamp + user + message)
+            const isDuplicate = prevMessages.some(msg => {
+              if (data.id && msg.id === data.id) return true;
+              // Fallback: check by timestamp, user, and message content
+              return msg.timestamp === newMessage.timestamp &&
+                     msg.user === newMessage.user &&
+                     msg.message === newMessage.message;
+            });
+            
+            if (isDuplicate) {
+              return prevMessages; // Don't add duplicate
+            }
+            
+            const updated = [...prevMessages, newMessage];
+            // Only notify if this is a new message (not a duplicate we just filtered)
+            if (onNewMessage && !isDuplicate) {
+              onNewMessage(updated.length - 1, newMessage.id || data.id);
+            }
+            return updated;
+          });
+        });
+      }
+    };
+
+    // Invocation: Call loadChatData() at the end of the useEffect hook
+    loadChatData();
+    
+    // Cleanup: Return a cleanup function that calls newSocket.disconnect()
     return () => {
-      newSocket.off('receiveMessage');
-      newSocket.off('connect');
-      newSocket.off('disconnect');
-      newSocket.disconnect();
+      if (socketRef.current) {
+        socketRef.current.off('receiveMessage');
+        socketRef.current.off('connect');
+        socketRef.current.off('disconnect');
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
       setSocket(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,6 +199,11 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage }) => {
   };
 
   // Part 4: Component Render
+  // If not visible, maintain socket connection but don't render UI
+  if (!isVisible) {
+    return <div style={{ display: 'none' }} />;
+  }
+
   return (
     <div style={{
       display: 'flex',
@@ -153,7 +263,7 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage }) => {
             const isMyMessage = msg.userRole === userRole;
             return (
             <div
-              key={index}
+              key={msg.id || `${msg.timestamp}-${msg.user}-${index}`}
               style={{
                 padding: '10px 14px',
                 backgroundColor: isMyMessage ? '#4caf50' : '#2d2d2d',

@@ -1,7 +1,7 @@
 # backend/api.py
 
 from flask import Blueprint, request, jsonify
-from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange
+from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message
 from sqlalchemy import func
 from datetime import datetime
 import json
@@ -1215,3 +1215,19 @@ def decline_pending_change(project_id, change_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+
+# ==================== CHAT ENDPOINTS ====================
+
+@api.route('/api/chat/history/<int:project_id>', methods=['GET'])
+def get_chat_history(project_id):
+    """Get chat message history for a project"""
+    try:
+        # Query messages from database: SELECT user_name, content, timestamp 
+        # FROM messages WHERE project_id = project_id ORDER BY timestamp ASC
+        messages = Message.query.filter_by(project_id=project_id).order_by(Message.timestamp.asc()).all()
+        
+        # Serialize query results into JSON array
+        return jsonify([msg.to_dict() for msg in messages]), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
