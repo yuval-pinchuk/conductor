@@ -12,6 +12,10 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
   const [targetDateTime, setTargetDateTime] = useState(null);
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  // Track server time offset to avoid using incorrect client system time
+  const serverTimeOffsetRef = useRef(0); // Difference: clientTime - serverTime (in milliseconds)
+  const lastServerElapsedRef = useRef(0); // Last elapsed time received from server
+  const lastServerTimeRef = useRef(null); // Last server time received
 
   // Format time for display (e.g., "+01:23:45" or "-00:30:00")
   const formatTime = (totalSeconds) => {
@@ -64,25 +68,49 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
           setTargetDateTime(null);
         }
         
-        // Calculate initial elapsed time
-        let initialElapsed = data.initialOffset || 0;
-        if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
-          // Use UTC time to avoid timezone issues
-          const now = new Date();
-          const elapsedSinceStart = Math.floor((now - parsedStartTime) / 1000);
-          initialElapsed += elapsedSinceStart;
-        }
-        // If we have a target, calculate countdown instead
-        if (data.targetDateTime) {
-          const parsedTarget = data.targetDateTime.endsWith('Z') || data.targetDateTime.match(/[+-]\d{2}:\d{2}$/)
-            ? new Date(data.targetDateTime)
-            : new Date(data.targetDateTime + 'Z');
-          if (!isNaN(parsedTarget.getTime())) {
-            const now = new Date();
-            const diffSeconds = Math.floor((parsedTarget - now) / 1000);
-            initialElapsed = -diffSeconds; // Invert sign: negative = countdown, positive = count up
+        // Use server-provided elapsed time if available (server calculates using correct server time)
+        // Otherwise fall back to calculating locally
+        let initialElapsed = data.secondsElapsed !== undefined ? data.secondsElapsed : (data.initialOffset || 0);
+        
+        // If server provided time, calculate offset between client and server time
+        if (data.serverTime) {
+          const serverTime = new Date(data.serverTime);
+          const clientTime = new Date();
+          if (!isNaN(serverTime.getTime())) {
+            // Calculate offset: clientTime - serverTime
+            serverTimeOffsetRef.current = clientTime.getTime() - serverTime.getTime();
+            lastServerElapsedRef.current = initialElapsed;
+            lastServerTimeRef.current = serverTime.getTime();
           }
         }
+        
+        // Fallback: calculate locally if server didn't provide elapsed time
+        if (data.secondsElapsed === undefined) {
+          if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
+            // Use server time offset if available, otherwise use client time
+            const now = serverTimeOffsetRef.current ? 
+              new Date(Date.now() - serverTimeOffsetRef.current) : 
+              new Date();
+            const nowUTC = now.getTime();
+            const startTimeUTC = parsedStartTime.getTime();
+            const elapsedSinceStart = Math.floor((nowUTC - startTimeUTC) / 1000);
+            initialElapsed += elapsedSinceStart;
+          }
+          // If we have a target, calculate countdown instead
+          if (data.targetDateTime) {
+            const parsedTarget = data.targetDateTime.endsWith('Z') || data.targetDateTime.match(/[+-]\d{2}:\d{2}$/)
+              ? new Date(data.targetDateTime)
+              : new Date(data.targetDateTime + 'Z');
+            if (!isNaN(parsedTarget.getTime())) {
+              const now = serverTimeOffsetRef.current ? 
+                new Date(Date.now() - serverTimeOffsetRef.current) : 
+                new Date();
+              const diffSeconds = Math.floor((parsedTarget - now) / 1000);
+              initialElapsed = -diffSeconds; // Invert sign: negative = countdown, positive = count up
+            }
+          }
+        }
+        
         setSecondsElapsed(initialElapsed);
         
         // Notify parent component of initial time
@@ -180,19 +208,42 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
         setTargetDateTime(null);
       }
       
-      // Calculate current elapsed time
-      let currentElapsed = data.initialOffset || 0;
+      // Use server-provided elapsed time (calculated on server with correct server time)
+      // This avoids using incorrect client system time
+      let currentElapsed = data.secondsElapsed !== undefined ? data.secondsElapsed : (data.initialOffset || 0);
       
-      // If we have a target datetime, calculate countdown/countup
-      if (parsedTarget && !isNaN(parsedTarget.getTime())) {
-        const now = new Date();
-        const diffSeconds = Math.floor((parsedTarget - now) / 1000);
-        currentElapsed = -diffSeconds; // Invert sign: negative = countdown, positive = count up
-      } else if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
-        // Use UTC time to avoid timezone issues
-        const now = new Date();
-        const elapsedSinceStart = Math.floor((now - parsedStartTime) / 1000);
-        currentElapsed += elapsedSinceStart;
+      // Calculate/update server time offset if server provided its time
+      if (data.serverTime) {
+        const serverTime = new Date(data.serverTime);
+        const clientTime = new Date();
+        if (!isNaN(serverTime.getTime())) {
+          // Calculate offset: clientTime - serverTime (difference in milliseconds)
+          serverTimeOffsetRef.current = clientTime.getTime() - serverTime.getTime();
+          lastServerElapsedRef.current = currentElapsed;
+          lastServerTimeRef.current = serverTime.getTime();
+        }
+      }
+      
+      // Fallback: calculate locally only if server didn't provide elapsed time
+      if (data.secondsElapsed === undefined) {
+        // If we have a target datetime, calculate countdown/countup
+        if (parsedTarget && !isNaN(parsedTarget.getTime())) {
+          // Use server time if offset is available, otherwise use client time
+          const now = serverTimeOffsetRef.current ? 
+            new Date(Date.now() - serverTimeOffsetRef.current) : 
+            new Date();
+          const diffSeconds = Math.floor((parsedTarget - now) / 1000);
+          currentElapsed = -diffSeconds; // Invert sign: negative = countdown, positive = count up
+        } else if (data.isRunning && parsedStartTime && !isNaN(parsedStartTime.getTime())) {
+          // Use server time if offset is available, otherwise use client time
+          const now = serverTimeOffsetRef.current ? 
+            new Date(Date.now() - serverTimeOffsetRef.current) : 
+            new Date();
+          const nowUTC = now.getTime();
+          const startTimeUTC = parsedStartTime.getTime();
+          const elapsedSinceStart = Math.floor((nowUTC - startTimeUTC) / 1000);
+          currentElapsed += elapsedSinceStart;
+        }
       }
       
       setSecondsElapsed(currentElapsed);
@@ -223,6 +274,7 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
   const socketRef = useRef(socket);
   const projectIdRef = useRef(projectId);
   const onTimeUpdateRef = useRef(onTimeUpdate);
+  // serverTimeOffsetRef, lastServerElapsedRef, and lastServerTimeRef are already defined above
 
   // Initialize ref immediately
   onTimeUpdateRef.current = onTimeUpdate;
@@ -236,6 +288,7 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     socketRef.current = socket;
     projectIdRef.current = projectId;
     onTimeUpdateRef.current = onTimeUpdate;
+    // Note: serverTimeOffsetRef is updated in timerStateUpdate handler, not here
   }, [initialOffset, lastStartTime, isRunning, targetDateTime, socket, projectId, onTimeUpdate]);
 
   // Local counting logic - runs when isRunning or lastStartTime changes
@@ -260,20 +313,30 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
     }
     
 
-    // Calculate elapsed time using refs (always up-to-date)
+    // Calculate elapsed time using server time offset (not client system time)
     const calculateElapsed = () => {
-      const now = new Date();
+      // Get server time by applying offset to client time
+      // This ensures we use server time even if client system time is wrong
+      const getServerTime = () => {
+        if (serverTimeOffsetRef.current) {
+          return new Date(Date.now() - serverTimeOffsetRef.current);
+        }
+        // Fallback to client time if offset not available (shouldn't happen after first server update)
+        return new Date();
+      };
+      
+      const serverNow = getServerTime();
       const currentTarget = targetDateTimeRef.current;
       
-      // If we have a target datetime, calculate countdown/countup
+      // If we have a target datetime, calculate countdown/countup using server time
       if (currentTarget && currentTarget instanceof Date && !isNaN(currentTarget.getTime())) {
         // Calculate difference: positive = target in future, negative = target passed
-        const diffSeconds = Math.floor((currentTarget - now) / 1000);
+        const diffSeconds = Math.floor((currentTarget - serverNow) / 1000);
         // Invert sign for display: negative = countdown (target in future), positive = count up (target passed)
         return -diffSeconds;
       }
       
-      // Otherwise, calculate normal elapsed time
+      // Otherwise, calculate normal elapsed time using server time
       const currentStartTime = lastStartTimeRef.current;
       const currentOffset = typeof initialOffsetRef.current === 'number' && !isNaN(initialOffsetRef.current) 
         ? initialOffsetRef.current 
@@ -284,12 +347,16 @@ const CollaborativeTimer = ({ projectId, isManager, onTimeUpdate }) => {
         return currentOffset;
       }
       
-      const elapsedSinceStart = Math.floor((now - currentStartTime) / 1000);
+      // Use server time (not client system time) to calculate elapsed time
+      // This ensures accuracy even if client system time is incorrect
+      const serverNowUTC = serverNow.getTime(); // UTC milliseconds (server time)
+      const startTimeUTC = currentStartTime.getTime(); // UTC milliseconds
+      const elapsedSinceStart = Math.floor((serverNowUTC - startTimeUTC) / 1000);
       const total = currentOffset + elapsedSinceStart;
       
       // Ensure we return a valid number
       if (typeof total !== 'number' || isNaN(total) || !isFinite(total)) {
-        console.warn('Invalid total calculated:', { currentOffset, elapsedSinceStart, total, now, currentStartTime });
+        console.warn('Invalid total calculated:', { currentOffset, elapsedSinceStart, total, serverNow, currentStartTime });
         return currentOffset;
       }
       
