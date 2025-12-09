@@ -310,9 +310,12 @@ const EditableTable = ({
 
   const parseTimeToSeconds = (timeStr) => {
     if (!timeStr || typeof timeStr !== 'string') return null;
-    const parts = timeStr.split(':').map(Number);
+    const isNegative = timeStr.startsWith('-');
+    const cleanTimeStr = isNegative ? timeStr.substring(1) : timeStr;
+    const parts = cleanTimeStr.split(':').map(Number);
     if (parts.length !== 3 || parts.some(isNaN)) return null;
-    return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    const seconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    return isNegative ? -seconds : seconds;
   };
 
   // Calculate total rows before current phase for continuous numbering
@@ -804,14 +807,16 @@ const EditableTable = ({
                 // When using target time countdown:
                 // - currentClockSeconds is negative when counting down (e.g., -3600 = 1 hour until target)
                 // - currentClockSeconds is positive when counting up past target (e.g., +3600 = 1 hour past target)
-                // - Row times are positive (e.g., "+01:30:00" = 5400 seconds from target)
+                // - Row times can be positive (e.g., "+01:30:00" = 5400 seconds from target) or negative (e.g., "-00:02:00" = -120 seconds from target)
                 // For highlighting: we want to highlight when the clock has reached or passed the row time
-                // During countdown (negative): we haven't reached any positive row times yet, so don't highlight
-                // After target (positive): compare normally - if currentClockSeconds >= rowTimeSeconds, highlight
+                // Comparison logic:
+                // - If both are negative: clock has passed if currentClockSeconds > rowTimeSeconds (e.g., -60 > -120)
+                // - If both are positive: clock has passed if currentClockSeconds >= rowTimeSeconds (e.g., 120 >= 60)
+                // - If clock is positive and row is negative: clock has passed (e.g., 60 >= -120)
+                // - If clock is negative and row is positive: clock hasn't passed yet (e.g., -60 < 60)
                 const hasClockPassedRowTime = Boolean(
                   isClockRunning &&
                   rowTimeSeconds !== null &&
-                  currentClockSeconds >= 0 && // Only check when at or past target (not counting down)
                   currentClockSeconds >= rowTimeSeconds
                 );
                 const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
