@@ -1,7 +1,7 @@
 # backend/api.py
 
 from flask import Blueprint, request, jsonify
-from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange
+from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message
 from sqlalchemy import func
 from datetime import datetime
 import json
@@ -697,17 +697,17 @@ def create_pending_change(project_id):
         # Process version change
         if 'version' in changes_data and changes_data['version'] != current_version:
             version_change = PendingChange(
-                project_id=project_id,
+        project_id=project_id,
                 submission_id=submission_id,
-                submitted_by=submitted_by,
-                submitted_by_role=submitted_by_role,
+        submitted_by=submitted_by,
+        submitted_by_role=submitted_by_role,
                 change_type='version',
                 changes_data=json.dumps({
                     'old_version': current_version,
                     'new_version': changes_data['version']
                 }),
-                status='pending'
-            )
+        status='pending'
+    )
             db.session.add(version_change)
             created_changes.append(version_change)
         
@@ -1028,7 +1028,7 @@ def accept_pending_change(project_id, change_id):
         if change_type == 'version':
             project.version = changes_data['new_version']
             db.session.commit()
-            
+                
         elif change_type == 'row_add':
             phase_number = changes_data.get('phase_number')
             phase_id = changes_data.get('phase_id')
@@ -1045,7 +1045,7 @@ def accept_pending_change(project_id, change_id):
                     db.session.add(phase)
                     db.session.flush()
                 phase_id = phase.id
-            
+                
             row = Row(
                 phase_id=phase_id,
                 role=row_data.get('role', ''),
@@ -1135,8 +1135,8 @@ def accept_pending_change(project_id, change_id):
         pending_change.status = 'accepted'
         if reviewed_by:
             pending_change.reviewed_by = reviewed_by
-        pending_change.reviewed_at = datetime.utcnow()
-        db.session.commit()
+            pending_change.reviewed_at = datetime.utcnow()
+            db.session.commit()
         
         # Notify all active users about the update (except the manager who made the change)
         active_users = User.query.filter_by(
@@ -1193,9 +1193,9 @@ def decline_pending_change(project_id, change_id):
         pending_change.status = 'declined'
         if reviewed_by:
             pending_change.reviewed_by = reviewed_by
-        pending_change.reviewed_at = datetime.utcnow()
-        db.session.commit()
-        
+            pending_change.reviewed_at = datetime.utcnow()
+            db.session.commit()
+    
         # Check if all changes in this submission are processed
         submission_id = pending_change.submission_id
         remaining_pending = PendingChange.query.filter_by(
@@ -1209,9 +1209,25 @@ def decline_pending_change(project_id, change_id):
             'submission_id': submission_id,
             'remaining_pending': remaining_pending,
             'all_processed': remaining_pending == 0
-        }), 200
+        }, 200)
         
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+
+# ==================== CHAT ENDPOINTS ====================
+
+@api.route('/api/chat/history/<int:project_id>', methods=['GET'])
+def get_chat_history(project_id):
+    """Get chat message history for a project"""
+    try:
+        # Query messages from database: SELECT user_name, content, timestamp 
+        # FROM messages WHERE project_id = project_id ORDER BY timestamp ASC
+        messages = Message.query.filter_by(project_id=project_id).order_by(Message.timestamp.asc()).all()
+        
+        # Serialize query results into JSON array
+        return jsonify([msg.to_dict() for msg in messages]), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

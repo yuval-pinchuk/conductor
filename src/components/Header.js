@@ -1,13 +1,14 @@
 // src/components/Header.js
 
 import React, {useState} from 'react';
-import { AppBar, Toolbar, Typography, IconButton, TextField, InputAdornment, Button} from '@mui/material';
+import { AppBar, Toolbar, Typography, IconButton, TextField, InputAdornment, Button, Badge} from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'; // Play icon
 import StopIcon from '@mui/icons-material/Stop';       // Stop icon
 import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Clock icon
+import ChatIcon from '@mui/icons-material/Chat'; // Chat icon
 
 const Header = ({ 
     project, 
@@ -28,13 +29,18 @@ const Header = ({
     handleClearTargetClockTime,
     targetDateTime,
     isUsingTargetTime,
-    isSaving = false
+    isSaving = false,
+    unreadMessageCount = 0,
+    onChatOpen,
+    onChatClose
 }) => {
   const [isEditingClock, setIsEditingClock] = useState(false);
   const [tempClockInput, setTempClockInput] = useState(clockTime);
+  const [tempTargetDateTime, setTempTargetDateTime] = useState('');
     
   const handleClockEditStart = () => {
       setTempClockInput(clockTime);
+      setTempTargetDateTime(targetDateTime || '');
       setIsEditingClock(true);
   };
 
@@ -63,6 +69,7 @@ const Header = ({
                         : (currentVersion || '');
 
   return (
+    <>
     <AppBar position="static">
       <Toolbar style={{ justifyContent: 'space-between' }}>
         {/* Left Corner: Version (Editable when isEditing) */}
@@ -146,19 +153,41 @@ const Header = ({
                   type="datetime-local"
                   size="small"
                   label="Target Time"
-                  value={targetDateTime || ''}
+                  value={tempTargetDateTime || targetDateTime || ''}
                   onChange={(e) => {
-                    handleSetTargetClockTime(e.target.value);
-                    if (e.target.value) {
-                      setIsEditingClock(false);
-                    }
+                    setTempTargetDateTime(e.target.value);
                   }}
                   InputLabelProps={{ shrink: true }}
                   style={{ width: 210, backgroundColor: '#333' }}
                   inputProps={{ style: { color: 'white' } }}
                 />
+                <Button 
+                  size="small" 
+                  variant="contained" 
+                  color="primary"
+                  onClick={() => {
+                    if (tempTargetDateTime) {
+                      handleSetTargetClockTime(tempTargetDateTime);
+                    }
+                    setTempTargetDateTime('');
+                    setIsEditingClock(false);
+                  }}
+                  disabled={!tempTargetDateTime}
+                >
+                  Set
+                </Button>
+                <Button 
+                  size="small" 
+                  variant="outlined" 
+                  onClick={() => {
+                    setTempTargetDateTime('');
+                    setIsEditingClock(false);
+                  }}
+                >
+                  Cancel
+                </Button>
                 {isUsingTargetTime && (
-                  <Button size="small" variant="outlined" onClick={handleClearTargetClockTime}>
+                  <Button size="small" variant="outlined" color="error" onClick={handleClearTargetClockTime}>
                     Clear
                   </Button>
                 )}
@@ -198,12 +227,26 @@ const Header = ({
             </>
           ) : (
             <IconButton color="inherit" onClick={onToggleEdit} title="Edit Project">
-              <EditIcon /> {/* Pencil button */}
+                <EditIcon /> {/* Pencil button */}
             </IconButton>
           )}
+          
+          {/* Chat Icon with Unread Badge */}
+          <Badge badgeContent={unreadMessageCount} color="error" max={99}>
+            <IconButton 
+              color="inherit" 
+              onClick={() => {
+                if (onChatOpen) onChatOpen();
+              }} 
+              title="Open Chat"
+            >
+              <ChatIcon />
+            </IconButton>
+          </Badge>
         </div>
       </Toolbar>
     </AppBar>
+    </>
   );
 };
 

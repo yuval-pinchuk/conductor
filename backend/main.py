@@ -4,7 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS, SERVER_HOST, SERVER_PORT, DEBUG
-from module import db, Project
+from module import db, Project, Message
 from api import api
 from datetime import datetime, timezone
 
@@ -72,13 +72,23 @@ def create_app():
                 # Get the offset before commit
                 initial_offset = project.timer_initial_offset
             
+            # Calculate current elapsed time on server (using server time, not client time)
+            seconds_elapsed = initial_offset
+            if project.timer_target_datetime:
+                # Countdown mode
+                diff_seconds = int((project.timer_target_datetime - now).total_seconds())
+                seconds_elapsed = -diff_seconds
+            # Note: elapsed time for running timer will be calculated in periodic updates
+            
             # Broadcast the new state to all clients in the room (after commit)
             room = f'timer_{project_id}'
             emit('timerStateUpdate', {
                 'isRunning': True,
                 'lastStartTime': now.isoformat() + 'Z',  # Explicitly mark as UTC
                 'initialOffset': initial_offset,
-                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None
+                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None,
+                'secondsElapsed': seconds_elapsed,
+                'serverTime': now.isoformat() + 'Z'  # Send server time so client can calculate offset
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_start: {e}')
@@ -113,13 +123,23 @@ def create_app():
                 # Get the offset before commit
                 final_offset = project.timer_initial_offset
             
+            # Calculate final elapsed time on server
+            seconds_elapsed = final_offset
+            if project.timer_target_datetime:
+                now = datetime.utcnow()
+                diff_seconds = int((project.timer_target_datetime - now).total_seconds())
+                seconds_elapsed = -diff_seconds
+            
             # Broadcast the new state to all clients in the room (after commit)
             room = f'timer_{project_id}'
+            now = datetime.utcnow()
             emit('timerStateUpdate', {
                 'isRunning': False,
                 'lastStartTime': None,
                 'initialOffset': final_offset,
-                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None
+                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None,
+                'secondsElapsed': seconds_elapsed,
+                'serverTime': now.isoformat() + 'Z'  # Send server time so client can calculate offset
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_stop: {e}')
@@ -156,13 +176,22 @@ def create_app():
                 db.session.flush()
                 final_offset = project.timer_initial_offset
             
+            # Calculate elapsed time on server
+            now = datetime.utcnow()
+            seconds_elapsed = final_offset
+            if project.timer_target_datetime:
+                diff_seconds = int((project.timer_target_datetime - now).total_seconds())
+                seconds_elapsed = -diff_seconds
+            
             # Broadcast the new state to all clients in the room
             room = f'timer_{project_id}'
             emit('timerStateUpdate', {
                 'isRunning': False,
                 'lastStartTime': None,
                 'initialOffset': final_offset,
-                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None
+                'targetDateTime': project.timer_target_datetime.isoformat() + 'Z' if project.timer_target_datetime else None,
+                'secondsElapsed': seconds_elapsed,
+                'serverTime': now.isoformat() + 'Z'
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_set_time: {e}')
@@ -225,13 +254,25 @@ def create_app():
                 final_offset = project.timer_initial_offset
                 final_target = project.timer_target_datetime
             
+            # Calculate elapsed time on server
+            now = datetime.utcnow()
+            seconds_elapsed = final_offset
+            if project.timer_is_running and project.timer_last_start_time:
+                elapsed_since_start = int((now - project.timer_last_start_time).total_seconds())
+                seconds_elapsed += elapsed_since_start
+            elif final_target:
+                diff_seconds = int((final_target - now).total_seconds())
+                seconds_elapsed = -diff_seconds
+            
             # Broadcast the new state to all clients in the room
             room = f'timer_{project_id}'
             emit('timerStateUpdate', {
                 'isRunning': project.timer_is_running,
                 'lastStartTime': project.timer_last_start_time.isoformat() + 'Z' if project.timer_last_start_time else None,
                 'initialOffset': final_offset,
-                'targetDateTime': final_target.isoformat() + 'Z' if final_target else None
+                'targetDateTime': final_target.isoformat() + 'Z' if final_target else None,
+                'secondsElapsed': seconds_elapsed,
+                'serverTime': now.isoformat() + 'Z'
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_set_target: {e}')
@@ -265,16 +306,82 @@ def create_app():
                 db.session.flush()
                 final_offset = project.timer_initial_offset
             
+            # Calculate elapsed time on server
+            now = datetime.utcnow()
+            seconds_elapsed = final_offset
+            if project.timer_is_running and project.timer_last_start_time:
+                elapsed_since_start = int((now - project.timer_last_start_time).total_seconds())
+                seconds_elapsed += elapsed_since_start
+            
             # Broadcast the new state to all clients in the room
             room = f'timer_{project_id}'
             emit('timerStateUpdate', {
                 'isRunning': project.timer_is_running,
                 'lastStartTime': project.timer_last_start_time.isoformat() + 'Z' if project.timer_last_start_time else None,
                 'initialOffset': final_offset,
-                'targetDateTime': None
+                'targetDateTime': None,
+                'secondsElapsed': seconds_elapsed,
+                'serverTime': now.isoformat() + 'Z'
             }, room=room)
         except Exception as e:
             print(f'Error in handle_request_clear_target: {e}')
+            import traceback
+            traceback.print_exc()
+    
+    # Chat handlers
+    @socketio.on('join_chat_room')
+    def handle_join_chat_room(data):
+        """Join a room for project chat"""
+        project_id = data.get('project_id')
+        if project_id:
+            room = f'chat_{project_id}'
+            join_room(room)
+            print(f'Client joined chat room: {room}')
+    
+    @socketio.on('sendMessage')
+    def handle_send_message(data):
+        """Handle chat message and broadcast to room"""
+        try:
+            project_id = data.get('projectId') or data.get('project_id')
+            user_id = data.get('userId') or data.get('user_id')
+            user_role = data.get('userRole') or data.get('user_role') or data.get('role')
+            message_content = data.get('message')
+            user_name = data.get('userName') or user_id
+            
+            if not project_id or not user_id or not message_content:
+                return
+            
+            # Save message to database
+            new_message = Message(
+                project_id=project_id,
+                user_name=user_name,
+                content=message_content,
+                user_role=user_role,
+                user_id=user_id,
+                timestamp=datetime.utcnow()
+            )
+            db.session.add(new_message)
+            db.session.commit()
+            
+            # Create message object with timestamp and ID for deduplication
+            message_data = {
+                'id': new_message.id,
+                'user': user_id,
+                'userId': user_id,
+                'userName': user_name,
+                'userRole': user_role,
+                'role': user_role,  # Include both for backward compatibility
+                'message': message_content,
+                'timestamp': new_message.timestamp.isoformat() + 'Z'
+            }
+            
+            # Broadcast to all clients in the project's chat room
+            room = f'chat_{project_id}'
+            emit('receiveMessage', message_data, room=room)
+            print(f'Message saved and broadcast to room {room}: {user_id}: {message_content}')
+        except Exception as e:
+            db.session.rollback()
+            print(f'Error in handle_send_message: {e}')
             import traceback
             traceback.print_exc()
     

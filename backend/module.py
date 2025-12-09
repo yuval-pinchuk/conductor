@@ -31,6 +31,7 @@ class Project(db.Model):
     phases = db.relationship('Phase', backref='project', lazy=True, cascade='all, delete-orphan')
     roles = db.relationship('ProjectRole', backref='project', lazy=True, cascade='all, delete-orphan')
     periodic_scripts = db.relationship('PeriodicScript', backref='project', lazy=True, cascade='all, delete-orphan')
+    messages = db.relationship('Message', backref='project', lazy=True, cascade='all, delete-orphan')
     
     def set_manager_password(self, raw_password: str):
         if raw_password:
@@ -214,3 +215,29 @@ class PendingChange(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
+
+class Message(db.Model):
+    """Chat messages table - stores persistent chat history"""
+    __tablename__ = 'messages'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_name = db.Column(db.String(255), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    user_role = db.Column(db.String(100), nullable=True)
+    user_id = db.Column(db.String(255), nullable=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'userName': self.user_name,
+            'user': self.user_name,
+            'message': self.content,
+            'content': self.content,
+            'userRole': self.user_role or 'Unknown',
+            'userId': self.user_id,
+            'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None
+        }
