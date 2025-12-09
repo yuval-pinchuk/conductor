@@ -202,12 +202,24 @@ const numberToTimeString = (value) => {
 const normalizeDuration = (value, fallback) => {
   if (value == null || value === '') return fallback;
   
-  // If it's a number (Excel time serial), convert to mm:ss
+  // If it's a number, determine if it's Excel time serial or plain minutes
   if (typeof value === 'number') {
-    const totalSeconds = Math.round(value * 24 * 60);
-    const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-    const seconds = String(totalSeconds % 60).padStart(2, '0');
-    return `${minutes}:${seconds}`;
+    // Excel time serials are typically between 0 and 1 (fraction of a day)
+    // If value is >= 1, treat it as minutes
+    // If value is < 1, treat it as Excel time serial (days)
+    if (value >= 1) {
+      // Treat as minutes
+      const totalSeconds = Math.round(value * 60);
+      const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+      const seconds = String(totalSeconds % 60).padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    } else {
+      // Treat as Excel time serial (fraction of a day)
+      const totalSeconds = Math.round(value * 24 * 60 * 60);
+      const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+      const seconds = String(totalSeconds % 60).padStart(2, '0');
+      return `${minutes}:${seconds}`;
+    }
   }
   
   // If it's a string, parse and normalize to mm:ss
@@ -233,10 +245,10 @@ const normalizeDuration = (value, fallback) => {
       return `${minutes}:${seconds}`;
     }
     
-    // If it's just a number as string (seconds), convert to mm:ss
+    // If it's just a number as string (minutes), convert to mm:ss
     const numValue = Number(trimmed);
     if (!Number.isNaN(numValue)) {
-      const totalSeconds = Math.round(numValue);
+      const totalSeconds = Math.round(numValue * 60); // Treat as minutes
       const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
       const seconds = String(totalSeconds % 60).padStart(2, '0');
       return `${minutes}:${seconds}`;
