@@ -123,6 +123,23 @@ CREATE TABLE `pending_changes` (
     ON DELETE CASCADE,
   INDEX `idx_submission_id` (`submission_id`)
 ) ENGINE=InnoDB;
+
+-- Messages table (chat messages for projects)
+CREATE TABLE `messages` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `project_id` INT NOT NULL,
+  `user_name` VARCHAR(255) NOT NULL,
+  `content` TEXT NOT NULL,
+  `user_role` VARCHAR(100) NULL,
+  `user_id` VARCHAR(255) NULL,
+  `timestamp` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_messages_project`
+    FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
+    ON DELETE CASCADE,
+  INDEX `idx_messages_project_id` (`project_id`),
+  INDEX `idx_messages_timestamp` (`timestamp`)
+) ENGINE=InnoDB;
  
  -- Optional seed data (comment out if not needed)
  -- INSERT INTO `projects` (`name`, `version`) VALUES ('Project Alpha', 'v1.2.5');

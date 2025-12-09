@@ -4,7 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS, SERVER_HOST, SERVER_PORT, DEBUG
-from module import db, Project
+from module import db, Project, Message
 from api import api
 from datetime import datetime, timezone
 
@@ -295,27 +295,42 @@ def create_app():
             project_id = data.get('projectId') or data.get('project_id')
             user_id = data.get('userId') or data.get('user_id')
             user_role = data.get('userRole') or data.get('user_role') or data.get('role')
-            message = data.get('message')
+            message_content = data.get('message')
+            user_name = data.get('userName') or user_id
             
-            if not project_id or not user_id or not message:
+            if not project_id or not user_id or not message_content:
                 return
             
-            # Create message object with timestamp
+            # Save message to database
+            new_message = Message(
+                project_id=project_id,
+                user_name=user_name,
+                content=message_content,
+                user_role=user_role,
+                user_id=user_id,
+                timestamp=datetime.utcnow()
+            )
+            db.session.add(new_message)
+            db.session.commit()
+            
+            # Create message object with timestamp and ID for deduplication
             message_data = {
+                'id': new_message.id,
                 'user': user_id,
                 'userId': user_id,
-                'userName': user_id,  # User's name/ID
+                'userName': user_name,
                 'userRole': user_role,
                 'role': user_role,  # Include both for backward compatibility
-                'message': message,
-                'timestamp': datetime.utcnow().isoformat() + 'Z'
+                'message': message_content,
+                'timestamp': new_message.timestamp.isoformat() + 'Z'
             }
             
             # Broadcast to all clients in the project's chat room
             room = f'chat_{project_id}'
             emit('receiveMessage', message_data, room=room)
-            print(f'Message broadcast to room {room}: {user_id}: {message}')
+            print(f'Message saved and broadcast to room {room}: {user_id}: {message_content}')
         except Exception as e:
+            db.session.rollback()
             print(f'Error in handle_send_message: {e}')
             import traceback
             traceback.print_exc()
