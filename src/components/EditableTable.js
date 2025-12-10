@@ -1,6 +1,6 @@
 // src/components/EditableTable.js
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
   Paper, IconButton, Select, MenuItem, TextField, Button,
@@ -17,7 +17,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import { api } from '../api/conductorApi';
 
 // Helper for time input with +/-
-const TimeInput = ({ value, onChange, format }) => {
+const TimeInput = memo(({ value, onChange, format }) => {
   const safeValue = value || '';
   const initialTime = safeValue.startsWith('+') || safeValue.startsWith('-') ? safeValue.substring(1) : safeValue;
   const [time, setTime] = useState(initialTime);
@@ -78,8 +78,260 @@ return (
       />
     </div>
   );
-};
+});
 
+// Memoized Table Row Component
+const TableRowComponent = memo(({
+  row,
+  phaseIndex,
+  rowIndex,
+  globalRowNumber,
+  rowTimeSeconds,
+  rowStyles,
+  isEditing,
+  isUserRoleMatch,
+  canChangeStatus,
+  allRoles,
+  handleChange,
+  handleRunScript,
+  handleRowStatusSelection,
+  handleOpenUserInfoModal,
+  handleRemoveRow,
+  isManager,
+  rowRefs
+}) => {
+  return (
+    <TableRow 
+      key={row.id} 
+      style={rowStyles}
+      ref={el => {
+        if (el) rowRefs.current[row.id] = el;
+      }}
+    >
+      {/* Row Number - Global across all phases */}
+      <TableCell align="center" style={{ fontWeight: 'bold', fontSize: '1rem' }}>
+        {globalRowNumber}
+      </TableCell>
+      {/* Role */}
+      <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+        {isEditing ? (
+          <Select
+            value={row.role}
+            onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
+            size="small"
+            style={{ width: '100%', direction: 'rtl', fontSize: '1rem' }}
+            sx={{ '& .MuiSelect-select': { fontSize: '1rem' } }}
+          >
+            {allRoles.map(role => (
+              <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>
+            ))}
+          </Select>
+        ) : (
+          row.role
+        )}
+      </TableCell>
+      
+      <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+        {isEditing ? (
+            <TimeInput 
+            value={row.time}
+            onChange={(val) => handleChange(phaseIndex, rowIndex, 'time', val)}
+            format="hh:mm:ss" // Pass the expected format
+            />
+        ) : (
+            row.time
+        )}
+      </TableCell>
+
+      <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+        {isEditing ? (
+            <TimeInput 
+            value={row.duration}
+            onChange={(val) => handleChange(phaseIndex, rowIndex, 'duration', val)}
+            format="mm:ss" // Pass the expected format
+            />
+        ) : (
+            row.duration
+        )}
+      </TableCell>
+
+      {/* Description (Free Text, Expands Row) */}
+      <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+        {isEditing ? (
+          <TextField
+            value={row.description}
+            onChange={(e) => handleChange(phaseIndex, rowIndex, 'description', e.target.value)}
+            size="small"
+            multiline
+            fullWidth
+            sx={{ 
+              direction: 'rtl', 
+              '& textarea': { textAlign: 'right', fontSize: '1rem' },
+              '& .MuiInputBase-input': { fontSize: '1rem' }
+            }}
+          />
+        ) : (
+          <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '1rem' }}>
+            {row.description}
+          </Typography>
+        )}
+      </TableCell>
+      
+      {/* Script Column */}
+      <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+        {isEditing ? (
+          <TextField
+            value={row.script || ''}
+            onChange={(e) => handleChange(phaseIndex, rowIndex, 'script', e.target.value)}
+            size="small"
+            placeholder="נתיב/נקודת קצה API"
+            fullWidth
+            sx={{ 
+              direction: 'rtl', 
+              '& input': { textAlign: 'right', fontSize: '1rem' },
+              '& .MuiInputBase-input': { fontSize: '1rem' }
+            }}
+          />
+        ) : (
+          row.script ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Button 
+                  variant="contained" 
+                  size="small"
+                  color="primary"
+                  endIcon={<PlayArrowIcon />}
+                  onClick={() => handleRunScript(phaseIndex, rowIndex)}
+                  sx={{ fontSize: '1rem' }}
+                >
+                  הרץ סקריפט
+                </Button>
+                {row.scriptResult !== undefined && (
+                  row.scriptResult ? (
+                    <CheckIcon color="success" style={{ fontSize: 24 }} />
+                  ) : (
+                    <CloseIcon color="error" style={{ fontSize: 24 }} />
+                  )
+                )}
+              </div>
+            </div>
+          ) : (
+            <span style={{ color: '#666', fontSize: '1rem' }}>—</span>
+          )
+        )}
+      </TableCell>
+      
+      {/* Status (Pass/Fail/N/A) Column - V, X, N/A buttons, and User Info for Manager */}
+      <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
+        <div style={{ display: 'flex', width: '100%' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <IconButton
+              onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
+              size="small"
+              disabled={!canChangeStatus}
+              color={row.status === 'Passed' ? 'success' : 'default'}
+              title="עבר"
+            >
+              <CheckIcon />
+            </IconButton>
+            <IconButton
+              onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Failed')}
+              size="small"
+              disabled={!canChangeStatus}
+              color={row.status === 'Failed' ? 'error' : 'default'}
+              title="נכשל"
+            >
+              <CloseIcon />
+            </IconButton>
+            <IconButton
+              onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'N/A')}
+              size="small"
+              disabled={!canChangeStatus}
+              color={row.status === 'N/A' ? 'default' : 'default'}
+              title="לא רלוונטי"
+              sx={{
+                border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
+                borderRadius: '4px'
+              }}
+            >
+              <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
+            </IconButton>
+            {/* User Info Button for Manager (available always, not just in edit mode) */}
+            {isManager && (
+              <IconButton
+                onClick={() => handleOpenUserInfoModal(row, phaseIndex, rowIndex)}
+                size="small"
+                color="warning"
+                title="שלח התראה למשתמש"
+              >
+                <WarningIcon />
+              </IconButton>
+            )}
+          </div>
+        </div>
+      </TableCell>
+      
+      {/* Actions (Remove) */}
+      {isEditing && (
+        <TableCell style={{ textAlign: 'center', fontSize: '1rem' }}>
+          <IconButton onClick={() => handleRemoveRow(phaseIndex, rowIndex)} size="small" color="error">
+            <DeleteIcon />
+          </IconButton>
+        </TableCell>
+      )}
+    </TableRow>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison function for React.memo
+  // Compare row properties
+  if (prevProps.row.id !== nextProps.row.id ||
+      prevProps.row.role !== nextProps.row.role ||
+      prevProps.row.time !== nextProps.row.time ||
+      prevProps.row.duration !== nextProps.row.duration ||
+      prevProps.row.description !== nextProps.row.description ||
+      prevProps.row.script !== nextProps.row.script ||
+      prevProps.row.status !== nextProps.row.status ||
+      prevProps.row.scriptResult !== nextProps.row.scriptResult) {
+    return false;
+  }
+  
+  // Compare other props
+  if (prevProps.globalRowNumber !== nextProps.globalRowNumber ||
+      prevProps.rowTimeSeconds !== nextProps.rowTimeSeconds ||
+      prevProps.isEditing !== nextProps.isEditing ||
+      prevProps.canChangeStatus !== nextProps.canChangeStatus ||
+      prevProps.isUserRoleMatch !== nextProps.isUserRoleMatch ||
+      prevProps.isManager !== nextProps.isManager) {
+    return false;
+  }
+  
+  // Compare rowStyles by checking key properties instead of stringifying
+  const prevStyles = prevProps.rowStyles || {};
+  const nextStyles = nextProps.rowStyles || {};
+  if (prevStyles.backgroundColor !== nextStyles.backgroundColor ||
+      prevStyles.boxShadow !== nextStyles.boxShadow ||
+      prevStyles.borderLeft !== nextStyles.borderLeft ||
+      prevStyles.borderRight !== nextStyles.borderRight ||
+      prevStyles.borderTop !== nextStyles.borderTop ||
+      prevStyles.borderBottom !== nextStyles.borderBottom ||
+      prevStyles.border !== nextStyles.border) {
+    return false;
+  }
+  
+  // Compare allRoles array efficiently
+  const prevRoles = prevProps.allRoles || [];
+  const nextRoles = nextProps.allRoles || [];
+  if (prevRoles.length !== nextRoles.length) {
+    return false;
+  }
+  for (let i = 0; i < prevRoles.length; i++) {
+    if (prevRoles[i] !== nextRoles[i]) {
+      return false;
+    }
+  }
+  
+  return true;
+});
 
 const EditableTable = ({
     tableData,
@@ -114,20 +366,140 @@ const EditableTable = ({
   const nextRowRef = useRef(null);
   const tableHeaderRef = useRef(null);
   
-  const handleChange = (phaseIndex, rowIndex, field, newValue) => {
-    const newPhases = [...tableData];
-    newPhases[phaseIndex].rows[rowIndex][field] = newValue;
-    setTableData(newPhases);
-  };
+  const parseTimeToSeconds = useCallback((timeStr) => {
+    if (!timeStr || typeof timeStr !== 'string') return null;
+    const isNegative = timeStr.startsWith('-');
+    const cleanTimeStr = isNegative ? timeStr.substring(1) : timeStr;
+    const parts = cleanTimeStr.split(':').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return null;
+    const seconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    return isNegative ? -seconds : seconds;
+  }, []);
 
-  const handleAddRow = (phaseIndex) => {
+  // Pre-calculate global row numbers for all rows (memoized)
+  const globalRowNumbersMap = useMemo(() => {
+    const map = new Map();
+    let globalCount = 0;
+    tableData.forEach((phase, phaseIndex) => {
+      phase.rows.forEach((row, rowIndex) => {
+        const key = `${phaseIndex}-${rowIndex}`;
+        map.set(key, globalCount + 1);
+        globalCount++;
+      });
+    });
+    return map;
+  }, [tableData]);
+
+  // Pre-calculate parsed time values for all rows (memoized)
+  const parsedTimeMap = useMemo(() => {
+    const map = new Map();
+    tableData.forEach((phase, phaseIndex) => {
+      phase.rows.forEach((row, rowIndex) => {
+        const key = `${phaseIndex}-${rowIndex}`;
+        map.set(key, parseTimeToSeconds(row.time));
+      });
+    });
+    return map;
+  }, [tableData, parseTimeToSeconds]);
+
+  // Pre-calculate row styles for all rows (memoized)
+  const rowStylesMap = useMemo(() => {
+    const stylesMap = new Map();
+    
+    tableData.forEach((phase, phaseIndex) => {
+      const isPhaseActive = !!activePhases[phase.phase];
+      
+      phase.rows.forEach((row, rowIndex) => {
+        const key = `${phaseIndex}-${rowIndex}`;
+        const rowTimeSeconds = parsedTimeMap.get(key);
+        const isUserRoleMatch = row.role === userRole;
+        const isStatusUnset = !row.status || row.status === 'N/A';
+        
+        // Calculate if clock has passed row time
+        const hasClockPassedRowTime = Boolean(
+          isClockRunning &&
+          rowTimeSeconds !== null &&
+          currentClockSeconds >= rowTimeSeconds
+        );
+        const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
+        
+        // Determine row background color based on status
+        let baseColor = 'transparent';
+        if (row.status === 'Passed') baseColor = 'rgba(76, 175, 80, 0.2)'; // Light green
+        else if (row.status === 'Failed') baseColor = 'rgba(244, 67, 54, 0.2)'; // Light red
+        
+        // Build styles object
+        let styles = {
+          backgroundColor: baseColor,
+          transition: 'background-color 0.2s ease',
+        };
+
+        // Special case: user's row that is overdue - use orange/red to make it very visible
+        if (isUserRoleMatch && shouldHighlightOverdue) {
+          const overdueUserOverlay = 'rgba(255, 152, 0, 0.6)'; // Stronger orange background
+          styles = {
+            ...styles,
+            backgroundColor: overdueUserOverlay,
+            boxShadow: 'inset 0 0 0 4px rgba(255, 87, 34, 1), 0 0 25px rgba(255, 152, 0, 1)',
+            borderLeft: '8px solid #ff5722', // Thicker orange-red border
+            borderRight: '4px solid rgba(255, 87, 34, 0.8)',
+            borderTop: '2px solid rgba(255, 152, 0, 0.6)',
+            borderBottom: '2px solid rgba(255, 152, 0, 0.6)',
+          };
+        } else if (isUserRoleMatch) {
+          // User's row that is not overdue - blue highlight
+          const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
+          styles = {
+            ...styles,
+            backgroundColor: baseColor === 'transparent' ? highlightOverlay : baseColor,
+            boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
+            borderLeft: '4px solid #2196f3',
+          };
+        } else if (shouldHighlightOverdue) {
+          // Overdue row that doesn't belong to user - yellow highlight
+          const overdueOverlay = 'rgba(255, 235, 59, 0.4)';
+          styles = {
+            ...styles,
+            backgroundColor: baseColor === 'transparent' ? overdueOverlay : baseColor,
+            boxShadow: '0 0 15px rgba(255, 235, 59, 0.7)',
+            border: '2px solid rgba(255, 235, 59, 0.9)',
+          };
+        }
+        
+        stylesMap.set(key, styles);
+      });
+    });
+    
+    return stylesMap;
+  }, [tableData, userRole, isManager, isClockRunning, currentClockSeconds, activePhases, parsedTimeMap]);
+
+  // Calculate total rows before current phase for continuous numbering (memoized helper)
+  const getGlobalRowNumber = useCallback((phaseIndex, rowIndex) => {
+    const key = `${phaseIndex}-${rowIndex}`;
+    return globalRowNumbersMap.get(key) || 0;
+  }, [globalRowNumbersMap]);
+  
+  const handleChange = useCallback((phaseIndex, rowIndex, field, newValue) => {
+    setTableData(prevData => {
+      const newPhases = [...prevData];
+      newPhases[phaseIndex] = { ...newPhases[phaseIndex] };
+      newPhases[phaseIndex].rows = [...newPhases[phaseIndex].rows];
+      newPhases[phaseIndex].rows[rowIndex] = { ...newPhases[phaseIndex].rows[rowIndex], [field]: newValue };
+      return newPhases;
+    });
+  }, []);
+
+  const handleAddRow = useCallback((phaseIndex) => {
     const newRow = { id: Date.now(), role: allRoles[0] || 'Role', time: '00:00:00', duration: '00:00', description: '', status: 'N/A', script: '', scriptResult: undefined };
-    const newPhases = [...tableData];
-    newPhases[phaseIndex].rows.push(newRow);
-    setTableData(newPhases);
-  };
+    setTableData(prevData => {
+      const newPhases = [...prevData];
+      newPhases[phaseIndex] = { ...newPhases[phaseIndex] };
+      newPhases[phaseIndex].rows = [...newPhases[phaseIndex].rows, newRow];
+      return newPhases;
+    });
+  }, [allRoles]);
 
-  const handleRowStatusSelection = async (phaseIndex, rowIndex, statusValue) => {
+  const handleRowStatusSelection = useCallback(async (phaseIndex, rowIndex, statusValue) => {
     handleChange(phaseIndex, rowIndex, 'status', statusValue);
     const row = tableData[phaseIndex].rows[rowIndex];
     if (row && typeof onRowStatusChange === 'function') {
@@ -137,9 +509,9 @@ const EditableTable = ({
         console.error('Failed to update row status', error);
       }
     }
-  };
+  }, [handleChange, tableData, onRowStatusChange]);
 
-  const handleRunScript = async (phaseIndex, rowIndex) => {
+  const handleRunScript = useCallback(async (phaseIndex, rowIndex) => {
     const row = tableData[phaseIndex].rows[rowIndex];
     if (row?.script && typeof onRunRowScript === 'function') {
       try {
@@ -148,88 +520,85 @@ const EditableTable = ({
         console.error('Failed to run script', error);
       }
     }
-  };
+  }, [tableData, onRunRowScript]);
 
-  const handleRemoveRow = (phaseIndex, rowIndex) => {
-    const newPhases = [...tableData];
-    newPhases[phaseIndex].rows.splice(rowIndex, 1);
-    // If phase is empty, optionally remove phase here
-    setTableData(newPhases);
-  };
+  const handleRemoveRow = useCallback((phaseIndex, rowIndex) => {
+    setTableData(prevData => {
+      const newPhases = [...prevData];
+      newPhases[phaseIndex] = { ...newPhases[phaseIndex] };
+      newPhases[phaseIndex].rows = newPhases[phaseIndex].rows.filter((_, idx) => idx !== rowIndex);
+      return newPhases;
+    });
+  }, []);
   
-  const handleAddNewRole = () => {
+  const handleAddNewRole = useCallback(() => {
     if (newRole && !allRoles.includes(newRole)) {
-      setAllRoles([...allRoles, newRole]);
+      setAllRoles(prev => [...prev, newRole]);
       setNewRole('');
     }
-  };
+  }, [newRole, allRoles]);
 
-  const handleAddPhase = () => {
-    // Determine the next phase number
-    const newPhaseNumber = tableData.length > 0 
-        ? Math.max(...tableData.map(p => p.phase)) + 1 
-        : 1;
+  const handleAddPhase = useCallback(() => {
+    setTableData(prevData => {
+      const newPhaseNumber = prevData.length > 0 
+          ? Math.max(...prevData.map(p => p.phase)) + 1 
+          : 1;
+      const newPhase = {
+          phase: newPhaseNumber,
+          rows: [] // Start with no rows
+      };
+      return [...prevData, newPhase];
+    });
+  }, []);
 
-    const newPhase = {
-        phase: newPhaseNumber,
-        rows: [] // Start with no rows
-    };
-    setTableData([...tableData, newPhase]);
-  };
+  const handleRemovePhase = useCallback((phaseIndex) => {
+    setTableData(prevData => prevData.filter((_, idx) => idx !== phaseIndex));
+  }, []);
 
-  const handleRemovePhase = (phaseIndex) => {
-    // 1. Create a shallow copy of the phase array
-    const newPhases = [...tableData];
-    
-    // 2. Remove the phase at the specified index
-    newPhases.splice(phaseIndex, 1);
-    
-    // 3. Update the state
-    setTableData(newPhases);
-  };
-
-  const handleAddPeriodicScript = () => {
+  const handleAddPeriodicScript = useCallback(() => {
     const newScript = { id: Date.now(), name: 'New Script', path: '', status: false };
-    setPeriodicScripts([...periodicScripts, newScript]);
-  };
+    setPeriodicScripts(prev => [...prev, newScript]);
+  }, []);
 
-  const handleUpdatePeriodicScript = (scriptId, field, value) => {
-    const updatedScripts = periodicScripts.map(script =>
+  const handleUpdatePeriodicScript = useCallback((scriptId, field, value) => {
+    setPeriodicScripts(prev => prev.map(script =>
       script.id === scriptId ? { ...script, [field]: value } : script
-    );
-    setPeriodicScripts(updatedScripts);
-  };
+    ));
+  }, []);
 
-  const handleRemovePeriodicScript = (scriptId) => {
-    setPeriodicScripts(periodicScripts.filter(script => script.id !== scriptId));
-  };
+  const handleRemovePeriodicScript = useCallback((scriptId) => {
+    setPeriodicScripts(prev => prev.filter(script => script.id !== scriptId));
+  }, []);
 
-  const handleResetAllStatuses = () => {
+  const handleResetAllStatuses = useCallback(() => {
     // Show confirmation dialog
     const confirmed = window.confirm('האם אתה בטוח שברצונך לאפס את כל הסטטוסים ל-N/A? פעולה זו לא ניתנת לביטול.');
     if (!confirmed) {
       return;
     }
     
-    const newPhases = tableData.map(phase => ({
-      ...phase,
-      rows: phase.rows.map(row => ({ ...row, status: 'N/A' }))
-    }));
-    setTableData(newPhases);
-    
-    // Update all rows via API
-    newPhases.forEach(phase => {
-      phase.rows.forEach(row => {
-        if (row.id && typeof onRowStatusChange === 'function') {
-          onRowStatusChange(row.id, 'N/A').catch(err => {
-            console.error('Failed to update row status', err);
-          });
-        }
+    setTableData(prevData => {
+      const newPhases = prevData.map(phase => ({
+        ...phase,
+        rows: phase.rows.map(row => ({ ...row, status: 'N/A' }))
+      }));
+      
+      // Update all rows via API
+      newPhases.forEach(phase => {
+        phase.rows.forEach(row => {
+          if (row.id && typeof onRowStatusChange === 'function') {
+            onRowStatusChange(row.id, 'N/A').catch(err => {
+              console.error('Failed to update row status', err);
+            });
+          }
+        });
       });
+      
+      return newPhases;
     });
-  };
+  }, [onRowStatusChange]);
 
-  const handleOpenUserInfoModal = async (row, phaseIndex, rowIndex) => {
+  const handleOpenUserInfoModal = useCallback(async (row, phaseIndex, rowIndex) => {
     if (isManager) {
       // Check if there's an active user logged in for this role
       const hasActiveUser = activeLogins.some(login => login.role === row.role);
@@ -258,13 +627,13 @@ const EditableTable = ({
       // Regular user opens modal locally
       setUserInfoModal({ open: true, row, phaseIndex, rowIndex });
     }
-  };
+  }, [isManager, activeLogins, projectId, getGlobalRowNumber]);
 
-  const handleCloseUserInfoModal = () => {
+  const handleCloseUserInfoModal = useCallback(() => {
     setUserInfoModal({ open: false, row: null, phaseIndex: null, rowIndex: null });
-  };
+  }, []);
 
-  const handleJumpToRow = (targetPhaseIndex, targetRowIndex) => {
+  const handleJumpToRow = useCallback((targetPhaseIndex, targetRowIndex) => {
     handleCloseUserInfoModal();
     const rowId = tableData[targetPhaseIndex]?.rows[targetRowIndex]?.id;
     if (rowId && rowRefs.current[rowId] && tableContainerRef.current) {
@@ -306,29 +675,10 @@ const EditableTable = ({
         rowElement.style.backgroundColor = originalBg;
       }, 3000); // Stop after 3 seconds
     }
-  };
+  }, [handleCloseUserInfoModal, tableData]);
 
-  const parseTimeToSeconds = (timeStr) => {
-    if (!timeStr || typeof timeStr !== 'string') return null;
-    const isNegative = timeStr.startsWith('-');
-    const cleanTimeStr = isNegative ? timeStr.substring(1) : timeStr;
-    const parts = cleanTimeStr.split(':').map(Number);
-    if (parts.length !== 3 || parts.some(isNaN)) return null;
-    const seconds = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
-    return isNegative ? -seconds : seconds;
-  };
-
-  // Calculate total rows before current phase for continuous numbering
-  const getGlobalRowNumber = (phaseIndex, rowIndex) => {
-    let count = 0;
-    for (let i = 0; i < phaseIndex; i++) {
-      count += tableData[i]?.rows?.length || 0;
-    }
-    return count + rowIndex + 1;
-  };
-
-  // Find the next relevant row with N/A status
-  const getNextRelevantRow = () => {
+  // Find the next relevant row with N/A status (memoized)
+  const nextRelevantRow = useMemo(() => {
     for (let phaseIndex = 0; phaseIndex < tableData.length; phaseIndex++) {
       const phase = tableData[phaseIndex];
       for (let rowIndex = 0; rowIndex < phase.rows.length; rowIndex++) {
@@ -349,12 +699,10 @@ const EditableTable = ({
       }
     }
     return null;
-  };
-
-  const nextRelevantRow = getNextRelevantRow();
+  }, [tableData, isManager, userRole, getGlobalRowNumber]);
 
   // Process notification command (for non-manager users)
-  const processNotification = (command, notificationData) => {
+  const processNotification = useCallback((command, notificationData) => {
     if (!command || !notificationData) return;
     
     if (command === 'show_modal') {
@@ -375,7 +723,7 @@ const EditableTable = ({
         }
       }
     }
-  };
+  }, [tableData]);
 
   // Poll for notifications (for non-manager users)
   useEffect(() => {
@@ -797,258 +1145,38 @@ const EditableTable = ({
 
               {/* Data Rows */}
               {phase.rows.map((row, rowIndex) => {
-
                 // --- ACCESS CONTROL LOGIC---
                 const isUserRoleMatch = row.role === userRole;
                 const canChangeStatus = isPhaseActive && (isUserRoleMatch || isManager);
                 
-                const rowTimeSeconds = parseTimeToSeconds(row.time);
-                const isStatusUnset = !row.status || row.status === 'N/A';
-                // When using target time countdown:
-                // - currentClockSeconds is negative when counting down (e.g., -3600 = 1 hour until target)
-                // - currentClockSeconds is positive when counting up past target (e.g., +3600 = 1 hour past target)
-                // - Row times can be positive (e.g., "+01:30:00" = 5400 seconds from target) or negative (e.g., "-00:02:00" = -120 seconds from target)
-                // For highlighting: we want to highlight when the clock has reached or passed the row time
-                // Comparison logic:
-                // - If both are negative: clock has passed if currentClockSeconds > rowTimeSeconds (e.g., -60 > -120)
-                // - If both are positive: clock has passed if currentClockSeconds >= rowTimeSeconds (e.g., 120 >= 60)
-                // - If clock is positive and row is negative: clock has passed (e.g., 60 >= -120)
-                // - If clock is negative and row is positive: clock hasn't passed yet (e.g., -60 < 60)
-                const hasClockPassedRowTime = Boolean(
-                  isClockRunning &&
-                  rowTimeSeconds !== null &&
-                  currentClockSeconds >= rowTimeSeconds
-                );
-                const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
-                
-                // Determine row background color based on status
-                const getRowBackgroundColor = () => {
-                  if (row.status === 'Passed') return 'rgba(76, 175, 80, 0.2)'; // Light green
-                  if (row.status === 'Failed') return 'rgba(244, 67, 54, 0.2)'; // Light red
-                  return 'transparent'; // Default/N/A
-                };
-
-                const getRowStyles = () => {
-                  const baseColor = getRowBackgroundColor();
-                  let styles = {
-                    backgroundColor: baseColor,
-                    transition: 'background-color 0.2s ease',
-                  };
-
-                  // Special case: user's row that is overdue - use orange/red to make it very visible
-                  if (isUserRoleMatch && shouldHighlightOverdue) {
-                    const overdueUserOverlay = 'rgba(255, 152, 0, 0.6)'; // Stronger orange background
-                    styles = {
-                      ...styles,
-                      backgroundColor: baseColor === 'transparent' ? overdueUserOverlay : overdueUserOverlay,
-                      boxShadow: 'inset 0 0 0 4px rgba(255, 87, 34, 1), 0 0 25px rgba(255, 152, 0, 1)',
-                      borderLeft: '8px solid #ff5722', // Thicker orange-red border
-                      borderRight: '4px solid rgba(255, 87, 34, 0.8)',
-                      borderTop: '2px solid rgba(255, 152, 0, 0.6)',
-                      borderBottom: '2px solid rgba(255, 152, 0, 0.6)',
-                    };
-                  } else if (isUserRoleMatch) {
-                    // User's row that is not overdue - blue highlight
-                    const highlightOverlay = 'rgba(33, 150, 243, 0.18)';
-                    styles = {
-                      ...styles,
-                      backgroundColor: baseColor === 'transparent' ? highlightOverlay : baseColor,
-                      boxShadow: 'inset 0 0 0 2px rgba(33, 150, 243, 0.55)',
-                      borderLeft: '4px solid #2196f3',
-                    };
-                  } else if (shouldHighlightOverdue) {
-                    // Overdue row that doesn't belong to user - yellow highlight
-                    const overdueOverlay = 'rgba(255, 235, 59, 0.4)';
-                    styles = {
-                      ...styles,
-                      backgroundColor: styles.backgroundColor === 'transparent' ? overdueOverlay : styles.backgroundColor,
-                      boxShadow: `${styles.boxShadow ? `${styles.boxShadow}, ` : ''}0 0 15px rgba(255, 235, 59, 0.7)`,
-                      border: styles.border || '2px solid rgba(255, 235, 59, 0.9)',
-                    };
-                  }
-
-                  return styles;
-                };
+                // Use memoized parsed time and styles instead of recalculating
+                const key = `${phaseIndex}-${rowIndex}`;
+                const rowTimeSeconds = parsedTimeMap.get(key);
+                const rowStyles = rowStylesMap.get(key) || { backgroundColor: 'transparent', transition: 'background-color 0.2s ease' };
                 
                 const globalRowNumber = getGlobalRowNumber(phaseIndex, rowIndex);
-                return ( // <-- Start of the inner return
-                <TableRow 
-                  key={row.id} 
-                  style={getRowStyles()}
-                  ref={el => {
-                    if (el) rowRefs.current[row.id] = el;
-                  }}
-                >
-                  {/* Row Number - Global across all phases */}
-                  <TableCell align="center" style={{ fontWeight: 'bold', fontSize: '1rem' }}>
-                    {globalRowNumber}
-                  </TableCell>
-                  {/* Role */}
-                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    {isEditing ? (
-                      <Select
-                        value={row.role}
-                        onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
-                        size="small"
-                        style={{ width: '100%', direction: 'rtl', fontSize: '1rem' }}
-                        sx={{ '& .MuiSelect-select': { fontSize: '1rem' } }}
-                      >
-                        {allRoles.map(role => <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>)}
-                      </Select>
-                    ) : (
-                      row.role
-                    )}
-                  </TableCell>
-                  
-                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    {isEditing ? (
-                        <TimeInput 
-                        value={row.time}
-                        onChange={(val) => handleChange(phaseIndex, rowIndex, 'time', val)}
-                        format="hh:mm:ss" // Pass the expected format
-                        />
-                    ) : (
-                        row.time
-                    )}
-                  </TableCell>
-
-                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    {isEditing ? (
-                        <TimeInput 
-                        value={row.duration}
-                        onChange={(val) => handleChange(phaseIndex, rowIndex, 'duration', val)}
-                        format="mm:ss" // Pass the expected format
-                        />
-                    ) : (
-                        row.duration
-                    )}
-                  </TableCell>
-
-                  {/* Description (Free Text, Expands Row) */}
-                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    {isEditing ? (
-                      <TextField
-                        value={row.description}
-                        onChange={(e) => handleChange(phaseIndex, rowIndex, 'description', e.target.value)}
-                        size="small"
-                        multiline
-                        fullWidth
-                        sx={{ 
-                          direction: 'rtl', 
-                          '& textarea': { textAlign: 'right', fontSize: '1rem' },
-                          '& .MuiInputBase-input': { fontSize: '1rem' }
-                        }}
-                      />
-                    ) : (
-                      <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '1rem' }}>
-                        {row.description}
-                      </Typography>
-                    )}
-                  </TableCell>
-                  
-                  {/* Script Column */}
-                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    {isEditing ? (
-                      <TextField
-                        value={row.script || ''}
-                        onChange={(e) => handleChange(phaseIndex, rowIndex, 'script', e.target.value)}
-                        size="small"
-                        placeholder="נתיב/נקודת קצה API"
-                        fullWidth
-                        sx={{ 
-                          direction: 'rtl', 
-                          '& input': { textAlign: 'right', fontSize: '1rem' },
-                          '& .MuiInputBase-input': { fontSize: '1rem' }
-                        }}
-                      />
-                    ) : (
-                      row.script ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Button 
-                              variant="contained" 
-                              size="small"
-                              color="primary"
-                              endIcon={<PlayArrowIcon />}
-                              onClick={() => handleRunScript(phaseIndex, rowIndex)}
-                              sx={{ fontSize: '1rem' }}
-                            >
-                              הרץ סקריפט
-                            </Button>
-                            {row.scriptResult !== undefined && (
-                              row.scriptResult ? (
-                                <CheckIcon color="success" style={{ fontSize: 24 }} />
-                              ) : (
-                                <CloseIcon color="error" style={{ fontSize: 24 }} />
-                              )
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <span style={{ color: '#666', fontSize: '1rem' }}>—</span>
-                      )
-                    )}
-                  </TableCell>
-                  
-                  {/* Status (Pass/Fail/N/A) Column - V, X, N/A buttons, and User Info for Manager */}
-                  <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-                    <div style={{ display: 'flex', width: '100%' }}>
-                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <IconButton
-                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Passed')}
-                          size="small"
-                          disabled={!canChangeStatus}
-                          color={row.status === 'Passed' ? 'success' : 'default'}
-                          title="עבר"
-                        >
-                          <CheckIcon />
-                        </IconButton>
-                        <IconButton
-                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'Failed')}
-                          size="small"
-                          disabled={!canChangeStatus}
-                          color={row.status === 'Failed' ? 'error' : 'default'}
-                          title="נכשל"
-                        >
-                          <CloseIcon />
-                        </IconButton>
-                        <IconButton
-                          onClick={() => handleRowStatusSelection(phaseIndex, rowIndex, 'N/A')}
-                          size="small"
-                          disabled={!canChangeStatus}
-                          color={row.status === 'N/A' ? 'default' : 'default'}
-                          title="לא רלוונטי"
-                          sx={{
-                            border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
-                            borderRadius: '4px'
-                          }}
-                        >
-                          <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
-                        </IconButton>
-                        {/* User Info Button for Manager (available always, not just in edit mode) */}
-                        {isManager && (
-                          <IconButton
-                            onClick={() => handleOpenUserInfoModal(row, phaseIndex, rowIndex)}
-                            size="small"
-                            color="warning"
-                            title="שלח התראה למשתמש"
-                          >
-                            <WarningIcon />
-                          </IconButton>
-                        )}
-                      </div>
-                    </div>
-                  </TableCell>
-                  
-                  {/* Actions (Remove) */}
-                  {isEditing && (
-                    <TableCell style={{ textAlign: 'center', fontSize: '1rem' }}>
-                      <IconButton onClick={() => handleRemoveRow(phaseIndex, rowIndex)} size="small" color="error">
-                        <DeleteIcon />
-                      </IconButton>
-                    </TableCell>
-                  )}
-                </TableRow>
+                
+                return (
+                  <TableRowComponent
+                    key={row.id}
+                    row={row}
+                    phaseIndex={phaseIndex}
+                    rowIndex={rowIndex}
+                    globalRowNumber={globalRowNumber}
+                    rowTimeSeconds={rowTimeSeconds}
+                    rowStyles={rowStyles}
+                    isEditing={isEditing}
+                    isUserRoleMatch={isUserRoleMatch}
+                    canChangeStatus={canChangeStatus}
+                    allRoles={allRoles}
+                    handleChange={handleChange}
+                    handleRunScript={handleRunScript}
+                    handleRowStatusSelection={handleRowStatusSelection}
+                    handleOpenUserInfoModal={handleOpenUserInfoModal}
+                    handleRemoveRow={handleRemoveRow}
+                    isManager={isManager}
+                    rowRefs={rowRefs}
+                  />
                 );
               })}
             </React.Fragment>
