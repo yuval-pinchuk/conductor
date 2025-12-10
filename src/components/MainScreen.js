@@ -1,6 +1,6 @@
 // src/components/MainScreen.js
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
@@ -196,8 +196,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       setActivePhases(activePhasesMap);
       
       // Fetch roles
-      const rolesData = await api.getProjectRoles(project.id);
-      const roles = rolesData.map(r => r.role_name);
+      const roles = await api.getProjectRoles(project.id);
       setAllRoles(roles);
       
       // Fetch periodic scripts
@@ -249,7 +248,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         
         // Update roles
         const currentRoles = await api.getProjectRoles(project.id);
-        const currentRoleNames = new Set(currentRoles.map(r => r.role_name));
+        const currentRoleNames = new Set(currentRoles);
         
         // Add new roles
         for (const roleName of allRoles) {
@@ -514,7 +513,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         isEditing={isEditing}
         currentVersion={currentVersion}
         setCurrentVersion={setCurrentVersion}
-        onToggleEdit={() => setIsEditing(true)}
+        onToggleEdit={() => startTransition(() => setIsEditing(true))}
         onSave={handleSave}
         onCancel={handleCancel}
         clockTime={clockTime}
@@ -642,6 +641,22 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             ) : (
               <Box>
                 {(() => {
+                  // Helper function to get global row number from row ID
+                  const getGlobalRowNumberFromId = (rowId) => {
+                    if (!rowId) return null;
+                    let globalCount = 0;
+                    for (let phaseIndex = 0; phaseIndex < currentTableData.length; phaseIndex++) {
+                      const phase = currentTableData[phaseIndex];
+                      for (let rowIndex = 0; rowIndex < phase.rows.length; rowIndex++) {
+                        globalCount++;
+                        if (phase.rows[rowIndex].id === rowId) {
+                          return globalCount;
+                        }
+                      }
+                    }
+                    return null;
+                  };
+                  
                   // Group changes by submission_id
                   const groupedBySubmission = {};
                   pendingChanges.forEach(change => {
@@ -685,9 +700,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                               case 'row_add':
                                 return `הוספת שורה - שלב ${changesData.phase_number || 'N/A'}`;
                               case 'row_update':
-                                return `עדכון שורה #${changesData.row_id || 'N/A'}`;
+                                const updateRowNumber = getGlobalRowNumberFromId(changesData.row_id);
+                                return `עדכון שורה #${updateRowNumber || changesData.row_id || 'N/A'}`;
                               case 'row_delete':
-                                return `מחיקת שורה #${changesData.row_id || 'N/A'}`;
+                                const deleteRowNumber = getGlobalRowNumberFromId(changesData.row_id);
+                                return `מחיקת שורה #${deleteRowNumber || changesData.row_id || 'N/A'}`;
                               case 'version':
                                 return `שינוי גרסה: ${changesData.new_version || 'N/A'} → ${changesData.old_version || 'N/A'}`;
                               case 'role_add':
