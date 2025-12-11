@@ -91,7 +91,7 @@ const TableRowComponent = memo(({
   isEditing,
   isUserRoleMatch,
   canChangeStatus,
-  allRoles,
+  roleMenuItems,
   handleChange,
   handleRunScript,
   handleRowStatusSelection,
@@ -122,9 +122,7 @@ const TableRowComponent = memo(({
             style={{ width: '100%', direction: 'rtl', fontSize: '1rem' }}
             sx={{ '& .MuiSelect-select': { fontSize: '1rem' } }}
           >
-            {allRoles.map(role => (
-              <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>
-            ))}
+            {roleMenuItems}
           </Select>
         ) : (
           row.role
@@ -318,16 +316,9 @@ const TableRowComponent = memo(({
     return false;
   }
   
-  // Compare allRoles array efficiently
-  const prevRoles = prevProps.allRoles || [];
-  const nextRoles = nextProps.allRoles || [];
-  if (prevRoles.length !== nextRoles.length) {
+  // Compare roleMenuItems - since they're memoized, we can do reference comparison
+  if (prevProps.roleMenuItems !== nextProps.roleMenuItems) {
     return false;
-  }
-  for (let i = 0; i < prevRoles.length; i++) {
-    if (prevRoles[i] !== nextRoles[i]) {
-      return false;
-    }
   }
   
   return true;
@@ -401,6 +392,13 @@ const EditableTable = ({
     });
     return map;
   }, [tableData, parseTimeToSeconds]);
+
+  // Memoize role menu items to avoid recreating them on every render
+  const roleMenuItems = useMemo(() => {
+    return allRoles.map(role => (
+      <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>
+    ));
+  }, [allRoles]);
 
   // Pre-calculate row styles for all rows (memoized)
   const rowStylesMap = useMemo(() => {
@@ -756,10 +754,25 @@ const EditableTable = ({
         const height = periodicScriptsRef.current?.offsetHeight || 80;
         setPeriodicScriptsHeight(height);
       };
-      updateHeight();
-      // Update on window resize
-      window.addEventListener('resize', updateHeight);
-      return () => window.removeEventListener('resize', updateHeight);
+      
+      // Defer measurement when entering edit mode to avoid blocking
+      if (isEditing) {
+        const timeoutId = setTimeout(updateHeight, 0);
+        const idleCallback = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+        const idleId = idleCallback(updateHeight);
+        
+        // Update on window resize
+        window.addEventListener('resize', updateHeight);
+        return () => {
+          clearTimeout(timeoutId);
+          if (window.cancelIdleCallback) window.cancelIdleCallback(idleId);
+          window.removeEventListener('resize', updateHeight);
+        };
+      } else {
+        updateHeight();
+        window.addEventListener('resize', updateHeight);
+        return () => window.removeEventListener('resize', updateHeight);
+      }
     }
   }, [periodicScripts, isEditing, isManager]);
 
@@ -770,10 +783,24 @@ const EditableTable = ({
         const height = nextRowRef.current?.offsetHeight || 60;
         setNextRowHeight(height);
       };
-      updateHeight();
-      // Update on window resize
-      window.addEventListener('resize', updateHeight);
-      return () => window.removeEventListener('resize', updateHeight);
+      
+      // Defer measurement when entering edit mode
+      if (isEditing) {
+        const timeoutId = setTimeout(updateHeight, 0);
+        const idleCallback = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+        const idleId = idleCallback(updateHeight);
+        
+        window.addEventListener('resize', updateHeight);
+        return () => {
+          clearTimeout(timeoutId);
+          if (window.cancelIdleCallback) window.cancelIdleCallback(idleId);
+          window.removeEventListener('resize', updateHeight);
+        };
+      } else {
+        updateHeight();
+        window.addEventListener('resize', updateHeight);
+        return () => window.removeEventListener('resize', updateHeight);
+      }
     } else if (!nextRelevantRow) {
       // No next row, set height to 0
       setNextRowHeight(0);
@@ -787,18 +814,33 @@ const EditableTable = ({
         const height = tableHeaderRef.current?.offsetHeight || 53;
         setTableHeaderHeight(height);
       };
-      // Use requestAnimationFrame to ensure the table is rendered
-      const rafId = requestAnimationFrame(() => {
-        updateHeight();
-        // Also check after a small delay to catch any late rendering
-        setTimeout(updateHeight, 100);
-      });
-      // Update on window resize
-      window.addEventListener('resize', updateHeight);
-      return () => {
-        cancelAnimationFrame(rafId);
-        window.removeEventListener('resize', updateHeight);
-      };
+      
+      // Defer measurement when entering edit mode to avoid blocking
+      if (isEditing) {
+        // Use requestIdleCallback if available, otherwise use setTimeout with requestAnimationFrame
+        const idleCallback = window.requestIdleCallback || ((cb) => {
+          requestAnimationFrame(() => setTimeout(cb, 0));
+        });
+        const idleId = idleCallback(updateHeight);
+        
+        // Also check after a delay to catch any late rendering
+        const timeoutId = setTimeout(updateHeight, 150);
+        
+        window.addEventListener('resize', updateHeight);
+        return () => {
+          if (window.cancelIdleCallback) window.cancelIdleCallback(idleId);
+          clearTimeout(timeoutId);
+          window.removeEventListener('resize', updateHeight);
+        };
+      } else {
+        // Immediate update when not editing
+        const rafId = requestAnimationFrame(updateHeight);
+        window.addEventListener('resize', updateHeight);
+        return () => {
+          cancelAnimationFrame(rafId);
+          window.removeEventListener('resize', updateHeight);
+        };
+      }
     }
   }, [isEditing, tableData]);
 
@@ -1168,7 +1210,7 @@ const EditableTable = ({
                     isEditing={isEditing}
                     isUserRoleMatch={isUserRoleMatch}
                     canChangeStatus={canChangeStatus}
-                    allRoles={allRoles}
+                    roleMenuItems={roleMenuItems}
                     handleChange={handleChange}
                     handleRunScript={handleRunScript}
                     handleRowStatusSelection={handleRowStatusSelection}

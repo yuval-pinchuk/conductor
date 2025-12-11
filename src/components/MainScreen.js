@@ -1,6 +1,6 @@
 // src/components/MainScreen.js
 
-import React, { useState, useEffect, useCallback, useRef, startTransition } from 'react';
+import React, { useState, useEffect, useCallback, useRef, startTransition, useDeferredValue } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
@@ -45,6 +45,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [originalVersion, setOriginalVersion] = useState(project.version);
   
   const [isEditing, setIsEditing] = useState(false);
+  // Defer the isEditing value to allow React to keep UI responsive during transition
+  const deferredIsEditing = useDeferredValue(isEditing);
   const [originalTableData, setOriginalTableData] = useState([]);
   const [currentTableData, setCurrentTableData] = useState([]);
   const [allRoles, setAllRoles] = useState([]);
@@ -510,7 +512,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         project={projectDetails}
         role={role}
         name={name}
-        isEditing={isEditing}
+        isEditing={deferredIsEditing}
         currentVersion={currentVersion}
         setCurrentVersion={setCurrentVersion}
         onToggleEdit={() => startTransition(() => setIsEditing(true))}
@@ -550,7 +552,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         <EditableTable
           tableData={currentTableData}
           setTableData={setCurrentTableData}
-          isEditing={isEditing}
+          isEditing={deferredIsEditing}
           allRoles={allRoles}
           setAllRoles={setAllRoles}
           userRole={role}

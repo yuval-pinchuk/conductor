@@ -723,7 +723,7 @@ def create_pending_change(project_id):
             # Process each phase in the new data
             for phase_data in table_data:
                 phase_number = phase_data.get('phase')
-                if not phase_number:
+                if phase_number is None or phase_number == '':
                     continue
                 
                 new_rows = phase_data.get('rows', [])
