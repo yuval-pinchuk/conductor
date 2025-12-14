@@ -499,6 +499,7 @@ const EditableTable = ({
   const periodicScriptsRef = useRef(null);
   const nextRowRef = useRef(null);
   const tableHeaderRef = useRef(null);
+  const blinkIntervalRef = useRef(null);
   
   // Calculate total row count for progressive rendering
   const totalRowCount = useMemo(() => {
@@ -516,23 +517,38 @@ const EditableTable = ({
       if (totalRowCount > initialBatch) {
         let currentCount = initialBatch;
         const batchSize = 25; // Larger batches for faster completion
+        let cancelled = false;
+        let timeoutId = null;
+        let idleId = null;
         
         const renderNextBatch = () => {
-          if (currentCount < totalRowCount) {
-            currentCount = Math.min(currentCount + batchSize, totalRowCount);
-            setRenderedRowCount(currentCount);
-            
-            if (currentCount < totalRowCount) {
-              // Use requestIdleCallback for next batch, fallback to setTimeout
-              const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 8));
-              scheduler(renderNextBatch);
-            }
+          if (cancelled || currentCount >= totalRowCount) return;
+          
+          currentCount = Math.min(currentCount + batchSize, totalRowCount);
+          setRenderedRowCount(currentCount);
+          
+          if (currentCount < totalRowCount && !cancelled) {
+            // Use requestIdleCallback for next batch, fallback to setTimeout
+            const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 8));
+            idleId = scheduler(renderNextBatch);
           }
         };
         
         // Start progressive rendering immediately after initial batch
         const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
-        scheduler(renderNextBatch);
+        idleId = scheduler(renderNextBatch);
+        
+        // Cleanup function to cancel progressive rendering
+        return () => {
+          cancelled = true;
+          if (timeoutId) clearTimeout(timeoutId);
+          if (idleId && window.cancelIdleCallback) {
+            window.cancelIdleCallback(idleId);
+          } else if (idleId) {
+            // Fallback: if setTimeout was used, we can't cancel it, but cancelled flag prevents execution
+            clearTimeout(idleId);
+          }
+        };
       } else {
         setRenderedRowCount(totalRowCount);
       }
@@ -541,6 +557,24 @@ const EditableTable = ({
       setRenderedRowCount(Infinity);
     }
   }, [isEditing, totalRowCount]);
+
+  // Clean up rowRefs when rows are removed to prevent memory leaks
+  useEffect(() => {
+    // Clean up refs for rows that no longer exist
+    const currentRowIds = new Set();
+    tableData.forEach(phase => {
+      phase.rows.forEach(row => {
+        currentRowIds.add(row.id);
+      });
+    });
+    
+    // Remove refs for rows that were deleted
+    Object.keys(rowRefs.current).forEach(rowId => {
+      if (!currentRowIds.has(parseInt(rowId))) {
+        delete rowRefs.current[rowId];
+      }
+    });
+  }, [tableData]);
   
   const parseTimeToSeconds = useCallback((timeStr) => {
     if (!timeStr || typeof timeStr !== 'string') return null;
@@ -920,6 +954,13 @@ const EditableTable = ({
 
   const handleJumpToRow = useCallback((targetPhaseIndex, targetRowIndex) => {
     handleCloseUserInfoModal();
+    
+    // Clear any existing blink interval to prevent multiple intervals
+    if (blinkIntervalRef.current) {
+      clearInterval(blinkIntervalRef.current);
+      blinkIntervalRef.current = null;
+    }
+    
     const rowId = tableData[targetPhaseIndex]?.rows[targetRowIndex]?.id;
     if (rowId && rowRefs.current[rowId] && tableContainerRef.current) {
       const rowElement = rowRefs.current[rowId];
@@ -946,7 +987,7 @@ const EditableTable = ({
       // Highlight the row with green blinking for 3 seconds
       const originalBg = rowElement.style.backgroundColor;
       let isHighlighted = true;
-      const blinkInterval = setInterval(() => {
+      blinkIntervalRef.current = setInterval(() => {
         if (isHighlighted) {
           rowElement.style.backgroundColor = 'rgba(76, 175, 80, 0.6)'; // Green
         } else {
@@ -956,7 +997,10 @@ const EditableTable = ({
       }, 300); // Blink every 300ms
       
       setTimeout(() => {
-        clearInterval(blinkInterval);
+        if (blinkIntervalRef.current) {
+          clearInterval(blinkIntervalRef.current);
+          blinkIntervalRef.current = null;
+        }
         rowElement.style.backgroundColor = originalBg;
       }, 3000); // Stop after 3 seconds
     }
@@ -987,28 +1031,33 @@ const EditableTable = ({
   }, [tableData, isManager, userRole, getGlobalRowNumber]);
 
   // Process notification command (for non-manager users)
+  // Use functional state update to avoid tableData dependency
   const processNotification = useCallback((command, notificationData) => {
     if (!command || !notificationData) return;
     
     if (command === 'show_modal') {
-      // Find the row in tableData
+      // Find the row in tableData using functional state update
       const targetPhaseIndex = notificationData.phaseIndex;
       const targetRowIndex = notificationData.rowIndex;
       
       if (targetPhaseIndex !== undefined && targetRowIndex !== undefined) {
-        const phase = tableData[targetPhaseIndex];
-        if (phase && phase.rows[targetRowIndex]) {
-          const row = phase.rows[targetRowIndex];
-          setUserInfoModal({ 
-            open: true, 
-            row, 
-            phaseIndex: targetPhaseIndex, 
-            rowIndex: targetRowIndex 
-          });
-        }
+        // Use functional update to access current tableData without dependency
+        setTableData(currentData => {
+          const phase = currentData[targetPhaseIndex];
+          if (phase && phase.rows[targetRowIndex]) {
+            const row = phase.rows[targetRowIndex];
+            setUserInfoModal({ 
+              open: true, 
+              row, 
+              phaseIndex: targetPhaseIndex, 
+              rowIndex: targetRowIndex 
+            });
+          }
+          return currentData; // Return unchanged data
+        });
       }
     }
-  }, [tableData]);
+  }, []); // No dependencies - uses functional state update
 
   // Poll for notifications (for non-manager users)
   useEffect(() => {
@@ -1032,7 +1081,17 @@ const EditableTable = ({
 
       return () => clearInterval(interval);
     }
-  }, [isManager, projectId, userRole, userName, lastProcessedNotificationTimestamp, tableData]);
+  }, [isManager, projectId, userRole, userName, lastProcessedNotificationTimestamp, processNotification]);
+
+  // Cleanup blink interval on unmount
+  useEffect(() => {
+    return () => {
+      if (blinkIntervalRef.current) {
+        clearInterval(blinkIntervalRef.current);
+        blinkIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   // Measure periodic scripts height for sticky positioning
   useEffect(() => {
