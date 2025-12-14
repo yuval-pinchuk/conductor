@@ -121,7 +121,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
   const handleRowStatusChange = async (rowId, status) => {
     try {
-      await api.updateRow(rowId, { status });
+      await api.updateRow(rowId, { status, user_name: name, user_role: role });
       await loadProjectData(false);
     } catch (error) {
       console.error('Failed to update row status', error);
@@ -133,7 +133,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
   const handleRunRowScript = async (rowId) => {
     try {
-      const { result } = await api.runRowScript(rowId);
+      const { result } = await api.runRowScript(rowId, { user_name: name, user_role: role });
       applyRowUpdates(rowId, { scriptResult: result });
     } catch (error) {
       console.error('Failed to run script', error);
@@ -145,7 +145,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const handleTogglePhaseActivation = async (phase) => {
     if (!isManager) return;
     try {
-      const updatedPhase = await api.togglePhaseActive(phase.id);
+      const updatedPhase = await api.togglePhaseActive(phase.id, { user_name: name, user_role: role });
       setActivePhases(prev => ({
         ...prev,
         [updatedPhase.phase]: !!updatedPhase.is_active

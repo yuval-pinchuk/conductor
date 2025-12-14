@@ -32,6 +32,8 @@ class Project(db.Model):
     roles = db.relationship('ProjectRole', backref='project', lazy=True, cascade='all, delete-orphan')
     periodic_scripts = db.relationship('PeriodicScript', backref='project', lazy=True, cascade='all, delete-orphan')
     messages = db.relationship('Message', backref='project', lazy=True, cascade='all, delete-orphan')
+    action_logs = db.relationship('ActionLog', backref='project', lazy=True, cascade='all, delete-orphan')
+    action_logs = db.relationship('ActionLog', backref='project', lazy=True, cascade='all, delete-orphan')
     
     def set_manager_password(self, raw_password: str):
         if raw_password:
@@ -239,5 +241,36 @@ class Message(db.Model):
             'content': self.content,
             'userRole': self.user_role or 'Unknown',
             'userId': self.user_id,
+            'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None
+        }
+
+
+class ActionLog(db.Model):
+    """Action log table - stores user actions for auditing"""
+    __tablename__ = 'action_logs'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_name = db.Column(db.String(255), nullable=False)
+    user_role = db.Column(db.String(100), nullable=False)
+    action_type = db.Column(db.String(50), nullable=False)  # 'row_status_change', 'script_execution', 'phase_activation'
+    action_details = db.Column(db.Text, nullable=True)  # JSON string for flexible data storage
+    script_result = db.Column(db.Boolean, nullable=True)  # Only for script executions
+    row_id = db.Column(db.Integer, nullable=True)  # For row-related actions
+    phase_id = db.Column(db.Integer, nullable=True)  # For phase-related actions
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    def to_dict(self):
+        import json
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'user_name': self.user_name,
+            'user_role': self.user_role,
+            'action_type': self.action_type,
+            'action_details': json.loads(self.action_details) if self.action_details else None,
+            'script_result': self.script_result,
+            'row_id': self.row_id,
+            'phase_id': self.phase_id,
             'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None
         }

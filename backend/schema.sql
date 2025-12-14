@@ -141,6 +141,21 @@ CREATE TABLE `messages` (
   INDEX `idx_messages_timestamp` (`timestamp`)
 ) ENGINE=InnoDB;
  
+CREATE TABLE 'action_logs' (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    project_id INT NOT NULL,
+    user_name VARCHAR(255) NOT NULL,
+    user_role VARCHAR(100) NOT NULL,
+    action_type VARCHAR(50) NOT NULL,
+    action_details TEXT,
+    script_result BOOLEAN,
+    row_id INT,
+    phase_id INT,
+    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_project_id (project_id),
+    INDEX idx_timestamp (timestamp),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
  -- Optional seed data (comment out if not needed)
  -- INSERT INTO `projects` (`name`, `version`) VALUES ('Project Alpha', 'v1.2.5');
  

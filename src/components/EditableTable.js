@@ -889,33 +889,32 @@ const EditableTable = ({
     setPeriodicScripts(prev => prev.filter(script => script.id !== scriptId));
   }, []);
 
-  const handleResetAllStatuses = useCallback(() => {
-    // Show confirmation dialog
+  const handleResetAllStatuses = useCallback(async () => {
+    // First confirmation: Reset all statuses
     const confirmed = window.confirm('האם אתה בטוח שברצונך לאפס את כל הסטטוסים ל-N/A? פעולה זו לא ניתנת לביטול.');
     if (!confirmed) {
       return;
     }
     
-    setTableData(prevData => {
-      const newPhases = prevData.map(phase => ({
-        ...phase,
-        rows: phase.rows.map(row => ({ ...row, status: 'N/A' }))
-      }));
+    // Second confirmation: Reset the log
+    const clearLog = window.confirm('האם אתה גם רוצה לאפס את יומן הפעולות? אם תבחר "ביטול", הפעולה תתועד ביומן.');
+    
+    try {
+      // Call the new API endpoint
+      await api.resetAllStatuses(projectId, userName, userRole, clearLog);
       
-      // Update all rows via API
-      newPhases.forEach(phase => {
-        phase.rows.forEach(row => {
-          if (row.id && typeof onRowStatusChange === 'function') {
-            onRowStatusChange(row.id, 'N/A').catch(err => {
-              console.error('Failed to update row status', err);
-            });
-          }
-        });
+      // Update local state
+      setTableData(prevData => {
+        return prevData.map(phase => ({
+          ...phase,
+          rows: phase.rows.map(row => ({ ...row, status: 'N/A' }))
+        }));
       });
-      
-      return newPhases;
-    });
-  }, [onRowStatusChange]);
+    } catch (error) {
+      console.error('Failed to reset statuses', error);
+      alert('שגיאה באיפוס הסטטוסים: ' + (error.message || 'Unknown error'));
+    }
+  }, [projectId, userName, userRole, setTableData]);
 
   const handleOpenUserInfoModal = useCallback(async (row, phaseIndex, rowIndex) => {
     if (isManager) {

@@ -1,11 +1,12 @@
 # backend/api.py
 
 from flask import Blueprint, request, jsonify
-from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message
-from sqlalchemy import func
+from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog
+from sqlalchemy import func, text
 from datetime import datetime, timedelta
 import json
 import uuid
+from action_logger import ActionLogger
 
 api = Blueprint('api', __name__)
 
@@ -242,9 +243,30 @@ def delete_phase(phase_id):
 def toggle_phase_active(phase_id):
     """Toggle phase active status"""
     phase = Phase.query.get_or_404(phase_id)
+    data = request.get_json() or {}
+    
+    # Get old status before toggle
+    old_is_active = phase.is_active
     phase.is_active = not phase.is_active
     phase.updated_at = datetime.utcnow()
     db.session.commit()
+    
+    # Log phase activation (only if user is manager)
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    project = Project.query.get(phase.project_id)
+    
+    # Only log if user is manager
+    if project and project.manager_role == user_role:
+        ActionLogger.log_phase_activation(
+            phase.project_id, 
+            user_name, 
+            user_role, 
+            phase_id, 
+            phase.phase_number, 
+            phase.is_active
+        )
+    
     return jsonify(phase.to_dict()), 200
 
 
@@ -277,16 +299,91 @@ def update_row(row_id):
     row = Row.query.get_or_404(row_id)
     data = request.get_json()
     
-    row.role = data.get('role', row.role)
-    row.time = data.get('time', row.time)
-    row.duration = data.get('duration', row.duration)
-    row.description = data.get('description', row.description)
-    row.script = data.get('script', row.script)
-    row.status = data.get('status', row.status)
-    row.script_result = data.get('scriptResult', row.script_result)
-    row.updated_at = datetime.utcnow()
+    # Get old status before update for logging
+    old_status = row.status
+    new_status = data.get('status', row.status)
     
-    db.session.commit()
+    # Check if any fields other than status are being changed
+    role_changed = 'role' in data and data.get('role') != row.role
+    time_changed = 'time' in data and data.get('time') != row.time
+    duration_changed = 'duration' in data and data.get('duration') != row.duration
+    description_changed = 'description' in data and data.get('description') != row.description
+    script_changed = 'script' in data and data.get('script') != row.script
+    script_result_changed = 'scriptResult' in data and data.get('scriptResult') != row.script_result
+    
+    # Preserve updated_at if only status is being changed (to maintain row order)
+    only_status_changed = (
+        not role_changed and 
+        not time_changed and 
+        not duration_changed and 
+        not description_changed and 
+        not script_changed and 
+        not script_result_changed and
+        old_status != new_status
+    )
+    
+    # Store original updated_at if only status is changing
+    original_updated_at = row.updated_at if only_status_changed else None
+    
+    # Only update updated_at if something other than status changed
+    if only_status_changed:
+        # Use raw SQL to update only status without triggering ON UPDATE CURRENT_TIMESTAMP
+        # This preserves the original updated_at timestamp
+        # Note: 'rows' is a MySQL reserved word, so we must escape it with backticks
+        original_updated_at_str = original_updated_at.strftime('%Y-%m-%d %H:%M:%S')
+        
+        try:
+            # Update both status and updated_at in a single statement
+            # In MySQL, when you explicitly set a column with ON UPDATE CURRENT_TIMESTAMP,
+            # it should NOT trigger the auto-update. But to be safe, we update both at once.
+            db.session.execute(
+                text("UPDATE `rows` SET status = :status, updated_at = :updated_at WHERE id = :row_id"),
+                {'status': new_status, 'updated_at': original_updated_at_str, 'row_id': row_id}
+            )
+            db.session.commit()
+            
+            # Refresh the row object to get updated values
+            db.session.refresh(row)
+            
+            # Log status change if status actually changed
+            if old_status != new_status:
+                user_name = data.get('user_name', 'Unknown')
+                user_role = data.get('user_role', 'Unknown')
+                project_id = row.phase.project_id
+                ActionLogger.log_row_status_change(project_id, user_name, user_role, row_id, old_status, new_status)
+            
+            return jsonify(row.to_dict()), 200
+        except Exception as e:
+            db.session.rollback()
+            # Fall back to normal update if raw SQL fails
+            row.status = new_status
+            row.updated_at = datetime.utcnow()
+            db.session.commit()
+            if old_status != new_status:
+                user_name = data.get('user_name', 'Unknown')
+                user_role = data.get('user_role', 'Unknown')
+                project_id = row.phase.project_id
+                ActionLogger.log_row_status_change(project_id, user_name, user_role, row_id, old_status, new_status)
+            return jsonify(row.to_dict()), 200
+    else:
+        # Normal update - let ON UPDATE CURRENT_TIMESTAMP work
+        row.role = data.get('role', row.role)
+        row.time = data.get('time', row.time)
+        row.duration = data.get('duration', row.duration)
+        row.description = data.get('description', row.description)
+        row.script = data.get('script', row.script)
+        row.status = new_status
+        row.script_result = data.get('scriptResult', row.script_result)
+        row.updated_at = datetime.utcnow()
+        db.session.commit()
+    
+    # Log status change if status actually changed
+    if old_status != new_status:
+        user_name = data.get('user_name', 'Unknown')
+        user_role = data.get('user_role', 'Unknown')
+        project_id = row.phase.project_id
+        ActionLogger.log_row_status_change(project_id, user_name, user_role, row_id, old_status, new_status)
+    
     return jsonify(row.to_dict()), 200
 
 
@@ -303,15 +400,35 @@ def delete_row(row_id):
 def run_script(row_id):
     """Run a script for a row"""
     row = Row.query.get_or_404(row_id)
+    data = request.get_json() or {}
     
     # TODO: Implement actual script execution
     # For now, simulate with random result
     import random
     result = random.choice([True, False])
     
-    row.script_result = result
-    row.updated_at = datetime.utcnow()
+    # Preserve updated_at to maintain row order (only script_result changes)
+    # Use raw SQL to update only script_result without triggering ON UPDATE CURRENT_TIMESTAMP
+    # Note: 'rows' is a MySQL reserved word, so we must escape it with backticks
+    original_updated_at = row.updated_at
+    original_updated_at_str = original_updated_at.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Use raw SQL to preserve updated_at
+    db.session.execute(
+        text("UPDATE `rows` SET script_result = :result, updated_at = :updated_at WHERE id = :row_id"),
+        {'result': result, 'updated_at': original_updated_at_str, 'row_id': row_id}
+    )
     db.session.commit()
+    
+    # Refresh the row object
+    db.session.refresh(row)
+    
+    # Log script execution
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    project_id = row.phase.project_id
+    script_path = row.script or 'N/A'
+    ActionLogger.log_script_execution(project_id, user_name, user_role, row_id, script_path, result)
     
     return jsonify({'result': result}), 200
 
@@ -1561,4 +1678,277 @@ def get_chat_history(project_id):
         return jsonify([msg.to_dict() for msg in messages]), 200
         
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== ACTION LOG ENDPOINTS ====================
+
+@api.route('/api/projects/<int:project_id>/action-logs', methods=['GET'])
+def get_action_logs(project_id):
+    """Get action logs for a project (manager only)"""
+    project = Project.query.get_or_404(project_id)
+    
+    # Verify manager access
+    user_role = request.args.get('user_role', '').strip()
+    if not user_role or user_role != project.manager_role:
+        return jsonify({'error': 'Only managers can view action logs'}), 403
+    
+    try:
+        # Get optional filters
+        action_type = request.args.get('action_type')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        user_name = request.args.get('user_name')
+        
+        # Build query
+        query = ActionLog.query.filter_by(project_id=project_id)
+        
+        if action_type:
+            query = query.filter_by(action_type=action_type)
+        
+        if user_name:
+            query = query.filter_by(user_name=user_name)
+        
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                query = query.filter(ActionLog.timestamp >= start_dt)
+            except ValueError:
+                pass
+        
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                query = query.filter(ActionLog.timestamp <= end_dt)
+            except ValueError:
+                pass
+        
+        # Order by timestamp descending (most recent first)
+        logs = query.order_by(ActionLog.timestamp.desc()).all()
+        
+        return jsonify([log.to_dict() for log in logs]), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/projects/<int:project_id>/action-logs/pdf', methods=['GET'])
+def get_action_logs_pdf(project_id):
+    """Generate and download action logs as PDF (manager only)"""
+    project = Project.query.get_or_404(project_id)
+    
+    # Verify manager access
+    user_role = request.args.get('user_role', '').strip()
+    if not user_role or user_role != project.manager_role:
+        return jsonify({'error': 'Only managers can download action logs'}), 403
+    
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from io import BytesIO
+        
+        # Get all action logs for the project
+        logs = ActionLog.query.filter_by(project_id=project_id).order_by(ActionLog.timestamp.asc()).all()
+        
+        # Create PDF in memory
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        
+        # Container for the 'Flowable' objects
+        elements = []
+        
+        # Define styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=12,
+            alignment=1  # Center alignment
+        )
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=6
+        )
+        
+        # Title
+        title = Paragraph(f"Action Log - {project.name}", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Project info
+        info_text = f"Project: {project.name}<br/>Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>Total Actions: {len(logs)}"
+        info_para = Paragraph(info_text, styles['Normal'])
+        elements.append(info_para)
+        elements.append(Spacer(1, 0.2*inch))
+        
+        if not logs:
+            no_data = Paragraph("No action logs found for this project.", styles['Normal'])
+            elements.append(no_data)
+        else:
+            # Prepare table data
+            table_data = [['Timestamp', 'User', 'Role', 'Action', 'Details', 'Script Result']]
+            
+            for log in logs:
+                # Format timestamp
+                timestamp_str = log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else 'N/A'
+                
+                # Format action type
+                action_type_map = {
+                    'row_status_change': 'Row Status Change',
+                    'script_execution': 'Script Execution',
+                    'phase_activation': 'Phase Activation',
+                    'reset_statuses': 'Reset All Statuses'
+                }
+                action_display = action_type_map.get(log.action_type, log.action_type)
+                
+                # Format details
+                details_str = 'N/A'
+                if log.action_details:
+                    try:
+                        details = json.loads(log.action_details)
+                        if log.action_type == 'row_status_change':
+                            details_str = f"Row #{log.row_id}: {details.get('old_status', 'N/A')} → {details.get('new_status', 'N/A')}"
+                        elif log.action_type == 'script_execution':
+                            details_str = f"Row #{log.row_id}: {details.get('script_path', 'N/A')}"
+                        elif log.action_type == 'phase_activation':
+                            status = 'Activated' if details.get('is_active') else 'Deactivated'
+                            details_str = f"Phase {details.get('phase_number', 'N/A')}: {status}"
+                        elif log.action_type == 'reset_statuses':
+                            rows_count = details.get('rows_count', 0)
+                            details_str = f"Reset {rows_count} rows to N/A"
+                    except:
+                        details_str = log.action_details[:50]  # Truncate if not JSON
+                
+                # Format script result
+                script_result_str = 'N/A'
+                if log.script_result is not None:
+                    script_result_str = 'Success' if log.script_result else 'Failed'
+                
+                table_data.append([
+                    timestamp_str,
+                    log.user_name,
+                    log.user_role,
+                    action_display,
+                    details_str,
+                    script_result_str
+                ])
+            
+            # Create table
+            table = Table(table_data, colWidths=[1.5*inch, 1*inch, 1*inch, 1.2*inch, 2*inch, 1*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            
+            elements.append(table)
+        
+        # Build PDF
+        doc.build(elements)
+        
+        # Get PDF data
+        buffer.seek(0)
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        # Return PDF as response
+        from flask import Response
+        response = Response(pdf_data, mimetype='application/pdf')
+        response.headers['Content-Disposition'] = f'attachment; filename=action_log_{project.name}_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.pdf'
+        return response
+        
+    except ImportError:
+        return jsonify({'error': 'PDF generation library (reportlab) not installed'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/projects/<int:project_id>/action-logs', methods=['DELETE'])
+def clear_action_logs(project_id):
+    """Clear all action logs for a project (manager only)"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json() or {}
+    
+    # Verify manager access
+    user_role = data.get('user_role', '').strip()
+    if not user_role or user_role != project.manager_role:
+        return jsonify({'error': 'Only managers can clear action logs'}), 403
+    
+    try:
+        # Delete all action logs for this project
+        deleted_count = ActionLog.query.filter_by(project_id=project_id).delete()
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Action logs cleared successfully',
+            'deleted_count': deleted_count
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/projects/<int:project_id>/reset-statuses', methods=['POST'])
+def reset_all_statuses(project_id):
+    """Reset all row statuses to N/A and optionally clear action logs (manager only)"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json() or {}
+    
+    # Verify manager access
+    user_role = data.get('user_role', '').strip()
+    user_name = data.get('user_name', '').strip()
+    clear_log = data.get('clear_log', False)
+    
+    if not user_role or user_role != project.manager_role:
+        return jsonify({'error': 'Only managers can reset statuses'}), 403
+    
+    try:
+        # Get all rows for this project
+        phases = Phase.query.filter_by(project_id=project_id).all()
+        rows_count = 0
+        
+        for phase in phases:
+            rows = Row.query.filter_by(phase_id=phase.id).all()
+            for row in rows:
+                row.status = 'N/A'
+                row.updated_at = datetime.utcnow()
+                rows_count += 1
+        
+        db.session.commit()
+        
+        # Handle log clearing or logging
+        if clear_log:
+            # Clear all action logs
+            ActionLog.query.filter_by(project_id=project_id).delete()
+            db.session.commit()
+        else:
+            # Log the reset_statuses action
+            ActionLogger.log_reset_statuses(project_id, user_name, user_role, rows_count)
+        
+        return jsonify({
+            'message': 'All statuses reset successfully',
+            'rows_reset': rows_count,
+            'log_cleared': clear_log
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
