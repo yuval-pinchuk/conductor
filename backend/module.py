@@ -90,7 +90,7 @@ class Phase(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    rows = db.relationship('Row', backref='phase', lazy=True, cascade='all, delete-orphan', order_by='Row.id')
+    rows = db.relationship('Row', backref='phase', lazy=True, cascade='all, delete-orphan', order_by='Row.updated_at, Row.id')
     
     __table_args__ = (db.UniqueConstraint('project_id', 'phase_number', name='unique_project_phase'),)
     

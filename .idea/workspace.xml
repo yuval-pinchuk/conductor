@@ -7,6 +7,7 @@
     <list default="true" id="fd9e748f-35b9-47eb-9b99-facc2e1b0337" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/api.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/api.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/module.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/module.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/components/EditableTable.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/EditableTable.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/components/MainScreen.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/MainScreen.js" afterDir="false" />
     </list>
@@ -30,7 +31,7 @@
   "keyToString": {
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
-    "last_opened_file_path": "C:/Users/yuval/VSProjects/conductor/backend/main.py",
+    "last_opened_file_path": "C:/Users/yuval/VSProjects/OCTOPUS",
     "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
   }
 }]]></component>

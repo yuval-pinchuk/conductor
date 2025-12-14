@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
-  Paper, IconButton, Select, MenuItem, TextField, Button,
+  Paper, IconButton, TextField, Button,
   Typography, Dialog, DialogTitle, DialogContent, DialogActions, Alert
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -14,7 +14,30 @@ import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import WarningIcon from '@mui/icons-material/Warning';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { api } from '../api/conductorApi';
+
+// Pre-compile regex patterns outside component for performance
+const HHMMSS_STRICT_REGEX = /^[0-9]{2}:[0-5][0-9]:[0-5][0-9]$/; 
+const MMSS_STRICT_REGEX = /^[0-5][0-9]:[0-5][0-9]$/;
+
+// Pre-calculated styles for TextField to avoid recalculation
+const timeInputTextFieldStyles = {
+  '& .MuiInputBase-input': { fontSize: '1rem' }
+};
+
+const descriptionTextFieldStyles = {
+  direction: 'rtl',
+  '& textarea': { textAlign: 'right', fontSize: '1rem' },
+  '& .MuiInputBase-input': { fontSize: '1rem' }
+};
+
+const scriptTextFieldStyles = {
+  direction: 'rtl',
+  '& input': { textAlign: 'right', fontSize: '1rem' },
+  '& .MuiInputBase-input': { fontSize: '1rem' }
+};
 
 // Helper for time input with +/-
 const TimeInput = memo(({ value, onChange, format }) => {
@@ -22,11 +45,8 @@ const TimeInput = memo(({ value, onChange, format }) => {
   const initialTime = safeValue.startsWith('+') || safeValue.startsWith('-') ? safeValue.substring(1) : safeValue;
   const [time, setTime] = useState(initialTime);
   const [isNegative, setIsNegative] = useState(safeValue.startsWith('-'));
-  
-  // Regex for hh:mm:ss or mm:ss structure
-  const HHMMSS_STRICT_REGEX = /^[0-9]{2}:[0-5][0-9]:[0-5][0-9]$/; 
-  const MMSS_STRICT_REGEX = /^[0-5][0-9]:[0-5][0-9]$/;
 
+  // Use pre-compiled regex
   const currentRegex = format === 'mm:ss' ? MMSS_STRICT_REGEX : HHMMSS_STRICT_REGEX;
   const isFormatValid = currentRegex.test(time);
 
@@ -66,9 +86,7 @@ return (
         error={!isFormatValid} 
         helperText={!isFormatValid && `הפורמט חייב להיות בדיוק ${format === 'mm:ss' ? 'mm:ss' : 'hh:mm:ss'}`} // Updated helper text
         style={{ width: format === 'mm:ss' ? 95 : 140 }}
-        sx={{
-          '& .MuiInputBase-input': { fontSize: '1rem' }
-        }}
+        sx={timeInputTextFieldStyles}
         inputProps={{ 
             // Maximum length based on format (5 for mm:ss, 8 for hh:mm:ss)
             maxLength: format === 'mm:ss' ? 5 : 8, 
@@ -91,23 +109,105 @@ const TableRowComponent = memo(({
   isEditing,
   isUserRoleMatch,
   canChangeStatus,
-  roleMenuItems,
+  allRoles,
   handleChange,
   handleRunScript,
   handleRowStatusSelection,
   handleOpenUserInfoModal,
   handleRemoveRow,
+  handleDuplicateRow,
+  handleMoveRow,
   isManager,
-  rowRefs
+  rowRefs,
+  tableData
 }) => {
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleDragStart = (e) => {
+    if (!isEditing) return;
+    setIsDragging(true);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', JSON.stringify({
+      sourcePhaseIndex: phaseIndex,
+      sourceRowIndex: rowIndex,
+      rowId: row.id
+    }));
+    e.currentTarget.style.opacity = '0.5';
+  };
+
+  const handleDragEnd = (e) => {
+    setIsDragging(false);
+    e.currentTarget.style.opacity = '1';
+  };
+
+  const handleDragOver = (e) => {
+    if (!isEditing) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e) => {
+    setDragOver(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    
+    try {
+      const dragData = JSON.parse(e.dataTransfer.getData('text/plain'));
+      const sourcePhaseIndex = dragData.sourcePhaseIndex;
+      const sourceRowIndex = dragData.sourceRowIndex;
+      
+      // Calculate target row index
+      // When dropping on a row, we want to insert BEFORE that row (at its index)
+      // If moving within same phase and source is before target, we need to adjust
+      let targetRowIndex = rowIndex;
+      if (sourcePhaseIndex === phaseIndex) {
+        if (sourceRowIndex < rowIndex) {
+          // Moving down: insert at target index (which shifts everything down)
+          targetRowIndex = rowIndex;
+        } else {
+          // Moving up: insert at target index (source will be removed, so no adjustment needed)
+          targetRowIndex = rowIndex;
+        }
+      }
+      
+      
+      handleMoveRow(sourcePhaseIndex, sourceRowIndex, phaseIndex, targetRowIndex);
+    } catch (error) {
+      console.error('Error handling drop:', error);
+    }
+  };
+
   return (
     <TableRow 
       key={row.id} 
-      style={rowStyles}
+      style={{
+        ...rowStyles,
+        opacity: isDragging ? 0.5 : 1,
+        borderTop: dragOver ? '2px solid #ff9800' : 'none',
+        cursor: isEditing ? 'move' : 'default'
+      }}
+      draggable={isEditing}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       ref={el => {
         if (el) rowRefs.current[row.id] = el;
       }}
     >
+      {/* Drag Handle - Only in edit mode */}
+      {isEditing && (
+        <TableCell style={{ width: '30px', padding: '4px', textAlign: 'center' }}>
+          <DragIndicatorIcon style={{ color: '#666', cursor: 'grab' }} />
+        </TableCell>
+      )}
+      
       {/* Row Number - Global across all phases */}
       <TableCell align="center" style={{ fontWeight: 'bold', fontSize: '1rem' }}>
         {globalRowNumber}
@@ -115,15 +215,43 @@ const TableRowComponent = memo(({
       {/* Role */}
       <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
         {isEditing ? (
-          <Select
+          <select
             value={row.role}
             onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
-            size="small"
-            style={{ width: '100%', direction: 'rtl', fontSize: '1rem' }}
-            sx={{ '& .MuiSelect-select': { fontSize: '1rem' } }}
+            className="role-select-dark"
+            style={{ 
+              width: '100%', 
+              direction: 'rtl', 
+              fontSize: '1rem',
+              padding: '6px 32px 6px 8px', // 32px on logical right (visual left) for arrow, 8px on logical left (visual right) for text
+              border: '1px solid rgba(255, 255, 255, 0.23)',
+              borderRadius: '4px',
+              backgroundColor: '#1e1e1e',
+              color: '#ffffff',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              outline: 'none',
+              appearance: 'none',
+              WebkitAppearance: 'none',
+              MozAppearance: 'none',
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M6 9L1 4h10z'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 8px center', // 8px from right edge (visual left in RTL) for arrow
+              backgroundSize: '12px 12px'
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'rgba(255, 255, 255, 0.5)';
+              e.target.style.backgroundColor = '#2d2d2d';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'rgba(255, 255, 255, 0.23)';
+              e.target.style.backgroundColor = '#1e1e1e';
+            }}
           >
-            {roleMenuItems}
-          </Select>
+            {allRoles.map(role => (
+              <option key={role} value={role} style={{ backgroundColor: '#1e1e1e', color: '#ffffff' }}>{role}</option>
+            ))}
+          </select>
         ) : (
           row.role
         )}
@@ -162,11 +290,7 @@ const TableRowComponent = memo(({
             size="small"
             multiline
             fullWidth
-            sx={{ 
-              direction: 'rtl', 
-              '& textarea': { textAlign: 'right', fontSize: '1rem' },
-              '& .MuiInputBase-input': { fontSize: '1rem' }
-            }}
+            sx={descriptionTextFieldStyles}
           />
         ) : (
           <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '1rem' }}>
@@ -184,11 +308,7 @@ const TableRowComponent = memo(({
             size="small"
             placeholder="נתיב/נקודת קצה API"
             fullWidth
-            sx={{ 
-              direction: 'rtl', 
-              '& input': { textAlign: 'right', fontSize: '1rem' },
-              '& .MuiInputBase-input': { fontSize: '1rem' }
-            }}
+            sx={scriptTextFieldStyles}
           />
         ) : (
           row.script ? (
@@ -269,10 +389,23 @@ const TableRowComponent = memo(({
         </div>
       </TableCell>
       
-      {/* Actions (Remove) */}
+      {/* Actions (Duplicate, Remove) */}
       {isEditing && (
         <TableCell style={{ textAlign: 'center', fontSize: '1rem' }}>
-          <IconButton onClick={() => handleRemoveRow(phaseIndex, rowIndex)} size="small" color="error">
+          <IconButton 
+            onClick={() => handleDuplicateRow(phaseIndex, rowIndex)} 
+            size="small" 
+            color="primary"
+            title="שכפל שורה"
+          >
+            <ContentCopyIcon />
+          </IconButton>
+          <IconButton 
+            onClick={() => handleRemoveRow(phaseIndex, rowIndex)} 
+            size="small" 
+            color="error"
+            title="מחק שורה"
+          >
             <DeleteIcon />
           </IconButton>
         </TableCell>
@@ -316,9 +449,16 @@ const TableRowComponent = memo(({
     return false;
   }
   
-  // Compare roleMenuItems - since they're memoized, we can do reference comparison
-  if (prevProps.roleMenuItems !== nextProps.roleMenuItems) {
+  // Compare allRoles array efficiently
+  const prevRoles = prevProps.allRoles || [];
+  const nextRoles = nextProps.allRoles || [];
+  if (prevRoles.length !== nextRoles.length) {
     return false;
+  }
+  for (let i = 0; i < prevRoles.length; i++) {
+    if (prevRoles[i] !== nextRoles[i]) {
+      return false;
+    }
   }
   
   return true;
@@ -342,7 +482,9 @@ const EditableTable = ({
     onRunRowScript,
     activeLogins = [],
     projectId,
-    userName }) => {
+    userName,
+    registerRowMove,
+    registerRowDuplicate }) => {
   
   const [newRole, setNewRole] = useState('');
   const [userInfoModal, setUserInfoModal] = useState({ open: false, row: null, phaseIndex: null, rowIndex: null });
@@ -351,11 +493,54 @@ const EditableTable = ({
   const [periodicScriptsHeight, setPeriodicScriptsHeight] = useState(80); // Default estimate
   const [nextRowHeight, setNextRowHeight] = useState(60); // Default estimate for next row display
   const [tableHeaderHeight, setTableHeaderHeight] = useState(53); // Default estimate
+  const [renderedRowCount, setRenderedRowCount] = useState(Infinity); // Progressive rendering - start with all rendered
   const rowRefs = useRef({});
   const tableContainerRef = useRef(null);
   const periodicScriptsRef = useRef(null);
   const nextRowRef = useRef(null);
   const tableHeaderRef = useRef(null);
+  
+  // Calculate total row count for progressive rendering
+  const totalRowCount = useMemo(() => {
+    return tableData.reduce((count, phase) => count + phase.rows.length, 0);
+  }, [tableData]);
+  
+  // Progressive rendering: render rows in batches when entering edit mode
+  useEffect(() => {
+    if (isEditing) {
+      // Render first batch immediately (visible rows + buffer for smooth scrolling)
+      const initialBatch = Math.min(50, totalRowCount);
+      setRenderedRowCount(initialBatch);
+      
+      // Render remaining rows progressively in background using requestIdleCallback
+      if (totalRowCount > initialBatch) {
+        let currentCount = initialBatch;
+        const batchSize = 25; // Larger batches for faster completion
+        
+        const renderNextBatch = () => {
+          if (currentCount < totalRowCount) {
+            currentCount = Math.min(currentCount + batchSize, totalRowCount);
+            setRenderedRowCount(currentCount);
+            
+            if (currentCount < totalRowCount) {
+              // Use requestIdleCallback for next batch, fallback to setTimeout
+              const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 8));
+              scheduler(renderNextBatch);
+            }
+          }
+        };
+        
+        // Start progressive rendering immediately after initial batch
+        const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
+        scheduler(renderNextBatch);
+      } else {
+        setRenderedRowCount(totalRowCount);
+      }
+    } else {
+      // Reset to render all when not editing (for display mode - no edit components)
+      setRenderedRowCount(Infinity);
+    }
+  }, [isEditing, totalRowCount]);
   
   const parseTimeToSeconds = useCallback((timeStr) => {
     if (!timeStr || typeof timeStr !== 'string') return null;
@@ -393,12 +578,7 @@ const EditableTable = ({
     return map;
   }, [tableData, parseTimeToSeconds]);
 
-  // Memoize role menu items to avoid recreating them on every render
-  const roleMenuItems = useMemo(() => {
-    return allRoles.map(role => (
-      <MenuItem key={role} value={role} sx={{ fontSize: '1rem' }}>{role}</MenuItem>
-    ));
-  }, [allRoles]);
+  // No longer needed - using native select instead of MUI Select
 
   // Pre-calculate row styles for all rows (memoized)
   const rowStylesMap = useMemo(() => {
@@ -528,6 +708,113 @@ const EditableTable = ({
       return newPhases;
     });
   }, []);
+
+  // Track rows that were moved/duplicated to prevent index change notifications
+  const movedDuplicatedRowsRef = useRef(new Set());
+
+  const handleDuplicateRow = useCallback((phaseIndex, rowIndex) => {
+    const row = tableData[phaseIndex].rows[rowIndex];
+    if (!row) return;
+
+    const newRowId = Date.now();
+    const duplicatedRow = {
+      ...row,
+      id: newRowId, // New temporary ID
+      scriptResult: undefined // Reset script result
+    };
+
+    const targetPosition = rowIndex + 1;
+    const phaseNumber = tableData[phaseIndex].phase;
+    
+
+    if (isManager) {
+      // Manager: directly update state
+      setTableData(prevData => {
+        const newPhases = [...prevData];
+        newPhases[phaseIndex] = { ...newPhases[phaseIndex] };
+        const newRows = [...newPhases[phaseIndex].rows];
+        newRows.splice(targetPosition, 0, duplicatedRow); // Insert after original
+        newPhases[phaseIndex].rows = newRows;
+        return newPhases;
+      });
+    } else {
+      // Non-manager: register operation and update state
+      if (registerRowDuplicate) {
+        registerRowDuplicate(row.id, newRowId, phaseNumber, targetPosition);
+      }
+      
+      setTableData(prevData => {
+        const newPhases = [...prevData];
+        newPhases[phaseIndex] = { ...newPhases[phaseIndex] };
+        const newRows = [...newPhases[phaseIndex].rows];
+        newRows.splice(targetPosition, 0, duplicatedRow);
+        newPhases[phaseIndex].rows = newRows;
+        return newPhases;
+      });
+    }
+  }, [tableData, isManager, registerRowDuplicate]);
+
+  const handleMoveRow = useCallback((sourcePhaseIndex, sourceRowIndex, targetPhaseIndex, targetRowIndex) => {
+    if (sourcePhaseIndex === targetPhaseIndex && sourceRowIndex === targetRowIndex) {
+      return; // Same position, no move needed
+    }
+
+    const sourceRow = tableData[sourcePhaseIndex].rows[sourceRowIndex];
+    if (!sourceRow) return;
+
+    const sourcePhaseNumber = tableData[sourcePhaseIndex].phase;
+    const targetPhaseNumber = tableData[targetPhaseIndex].phase;
+    
+    // Calculate the actual final position (1-based) for display
+    // After moving, the row will be at targetRowIndex (0-based), which is targetRowIndex + 1 (1-based)
+    const finalPosition = targetRowIndex + 1;
+    
+
+    if (isManager) {
+      // Manager: directly update state
+      setTableData(prevData => {
+        const newPhases = [...prevData];
+        
+        // Remove from source
+        newPhases[sourcePhaseIndex] = { ...newPhases[sourcePhaseIndex] };
+        const sourceRows = [...newPhases[sourcePhaseIndex].rows];
+        const [movedRow] = sourceRows.splice(sourceRowIndex, 1);
+        newPhases[sourcePhaseIndex].rows = sourceRows;
+        
+        // Add to target
+        newPhases[targetPhaseIndex] = { ...newPhases[targetPhaseIndex] };
+        const targetRows = [...newPhases[targetPhaseIndex].rows];
+        targetRows.splice(targetRowIndex, 0, movedRow);
+        newPhases[targetPhaseIndex].rows = targetRows;
+        
+        return newPhases;
+      });
+    } else {
+      // Non-manager: register operation and update state
+      if (registerRowMove) {
+        // Pass sourceRowIndex for calculating source position in description
+        registerRowMove(sourceRow.id, sourcePhaseNumber, targetPhaseNumber, targetRowIndex, sourceRowIndex);
+      }
+      
+      setTableData(prevData => {
+        const newPhases = [...prevData];
+        
+        // Remove from source
+        newPhases[sourcePhaseIndex] = { ...newPhases[sourcePhaseIndex] };
+        const sourceRows = [...newPhases[sourcePhaseIndex].rows];
+        const [movedRow] = sourceRows.splice(sourceRowIndex, 1);
+        newPhases[sourcePhaseIndex].rows = sourceRows;
+        
+        // Add to target
+        newPhases[targetPhaseIndex] = { ...newPhases[targetPhaseIndex] };
+        const targetRows = [...newPhases[targetPhaseIndex].rows];
+        targetRows.splice(targetRowIndex, 0, movedRow);
+        newPhases[targetPhaseIndex].rows = targetRows;
+        
+        return newPhases;
+      });
+    }
+  }, [tableData, isManager, registerRowMove]);
   
   const handleAddNewRole = useCallback(() => {
     if (newRole && !allRoles.includes(newRole)) {
@@ -1127,6 +1414,7 @@ const EditableTable = ({
       }}>
         <TableHead>
           <TableRow ref={tableHeaderRef}>
+            {isEditing && <TableCell style={{ width: '3%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}></TableCell>}
             <TableCell style={{ width: '5%', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>#</TableCell>
             <TableCell style={{ width: '10%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>תפקיד</TableCell>
             <TableCell style={{ width: '15%', textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', backgroundColor: '#1e1e1e', position: 'sticky', top: `${periodicScriptsHeight + nextRowHeight}px`, zIndex: 8 }}>זמן</TableCell>
@@ -1146,7 +1434,7 @@ const EditableTable = ({
                 <React.Fragment key={phase.phase}>
                 {/* Phase Header Row */}
                 <TableRow style={{ backgroundColor: '#1e1e1e' }}>
-                  <TableCell colSpan={isEditing ? 8 : 7} style={{ 
+                  <TableCell colSpan={isEditing ? 9 : 7} style={{ 
                       fontWeight: 'bold', 
                       backgroundColor: '#1e1e1e',
                       textAlign: 'right',
@@ -1187,6 +1475,25 @@ const EditableTable = ({
 
               {/* Data Rows */}
               {phase.rows.map((row, rowIndex) => {
+                // Progressive rendering: calculate global row index
+                let globalRowIndex = 0;
+                for (let pIdx = 0; pIdx < phaseIndex; pIdx++) {
+                  globalRowIndex += tableData[pIdx].rows.length;
+                }
+                globalRowIndex += rowIndex;
+                
+                // Skip rendering if beyond progressive render count (only in edit mode)
+                if (isEditing && globalRowIndex >= renderedRowCount) {
+                  // Render placeholder row to maintain layout
+                  return (
+                    <TableRow key={`placeholder-${row.id}`} style={{ height: 53 }}>
+                      <TableCell colSpan={8} style={{ textAlign: 'center', color: '#666', fontSize: '0.9rem' }}>
+                        טוען...
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+                
                 // --- ACCESS CONTROL LOGIC---
                 const isUserRoleMatch = row.role === userRole;
                 const canChangeStatus = isPhaseActive && (isUserRoleMatch || isManager);
@@ -1210,14 +1517,17 @@ const EditableTable = ({
                     isEditing={isEditing}
                     isUserRoleMatch={isUserRoleMatch}
                     canChangeStatus={canChangeStatus}
-                    roleMenuItems={roleMenuItems}
+                    allRoles={allRoles}
                     handleChange={handleChange}
                     handleRunScript={handleRunScript}
                     handleRowStatusSelection={handleRowStatusSelection}
                     handleOpenUserInfoModal={handleOpenUserInfoModal}
                     handleRemoveRow={handleRemoveRow}
+                    handleDuplicateRow={handleDuplicateRow}
+                    handleMoveRow={handleMoveRow}
                     isManager={isManager}
                     rowRefs={rowRefs}
+                    tableData={tableData}
                   />
                 );
               })}

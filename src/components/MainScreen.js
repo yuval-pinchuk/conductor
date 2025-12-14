@@ -64,6 +64,12 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Pending Changes State
   const [pendingChanges, setPendingChanges] = useState([]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  
+  // Track explicit move/duplicate operations to prevent index change notifications
+  const explicitOperationsRef = useRef({ row_moves: [], row_duplicates: [] });
+  
+  // Track if we just accepted a change with table_data to prevent reload
+  const justAcceptedWithTableDataRef = useRef(false);
 
   // Loading states
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -228,7 +234,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Poll for project data updates (when not editing)
   // This ensures users see changes made by managers or other users
   useInterval(() => {
-    if (!isEditing && !isLoadingData) {
+    if (!isEditing && !isLoadingData && !justAcceptedWithTableDataRef.current) {
+      // Don't reload if we just accepted a change with table_data (to preserve order)
       loadProjectData(false).catch(err => {
           // Silently fail - polling is not critical
         });
@@ -281,8 +288,14 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           version: currentVersion,
           table_data: currentTableData,
           periodic_scripts: periodicScripts,
+          // Include explicit move/duplicate operations to prevent index change notifications
+          explicit_operations: {
+            row_moves: explicitOperationsRef.current.row_moves,
+            row_duplicates: explicitOperationsRef.current.row_duplicates
+          }
           // roles: allRoles, // Removed - roles are derived from rows, not independently managed
         };
+        
         
         await api.createPendingChange(
           project.id,
@@ -290,6 +303,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           role,
           changesData
         );
+        
+        // Clear explicit operations after submission
+        explicitOperationsRef.current = { row_moves: [], row_duplicates: [] };
         
         // Revert to original data after submission
         setCurrentTableData(originalTableData);
@@ -328,9 +344,35 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     // 2. Revert to the deep clone saved at the start of the session
     setCurrentTableData(originalTableData); 
     setPeriodicScripts(originalPeriodicScripts);
-    setCurrentVersion(originalVersion); 
+    setCurrentVersion(originalVersion);
+    // Clear explicit operations on cancel
+    explicitOperationsRef.current = { row_moves: [], row_duplicates: [] };
     setIsEditing(false);
   };
+  
+  // Callbacks to register move/duplicate operations
+  const registerRowMove = useCallback((rowId, sourcePhaseNumber, targetPhaseNumber, targetPosition, sourceRowIndex) => {
+    if (!isManager) {
+      explicitOperationsRef.current.row_moves.push({
+        row_id: rowId,
+        source_phase_number: sourcePhaseNumber,
+        target_phase_number: targetPhaseNumber,
+        target_position: targetPosition,
+        source_row_index: sourceRowIndex // Store source position for description
+      });
+    }
+  }, [isManager]);
+  
+  const registerRowDuplicate = useCallback((sourceRowId, newRowId, targetPhaseNumber, targetPosition) => {
+    if (!isManager) {
+      explicitOperationsRef.current.row_duplicates.push({
+        source_row_id: sourceRowId,
+        new_row_id: newRowId, // Track the new duplicated row ID to prevent it from being detected as a new row
+        target_phase_number: targetPhaseNumber,
+        target_position: targetPosition
+      });
+    }
+  }, [isManager]);
 
   // Fetch pending changes (for managers)
   const fetchPendingChanges = useCallback(async () => {
@@ -348,8 +390,33 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     try {
       const response = await api.acceptPendingChange(project.id, changeId, name);
       
-      // Refresh data from server (changes are already applied on backend)
-      await loadProjectData(false);
+      // If table_data is returned, use it to update local state (preserves row order)
+      if (response.table_data) {
+        
+        // Update currentTableData with the table_data from the submission
+        // This preserves the correct row order
+        
+        setCurrentTableData(response.table_data);
+        setOriginalTableData(JSON.parse(JSON.stringify(response.table_data)));
+        
+        // Also update active phases
+        const activePhasesMap = {};
+        response.table_data.forEach(phase => {
+          activePhasesMap[phase.phase] = !!phase.is_active;
+        });
+        setActivePhases(activePhasesMap);
+        
+        // Set a flag to prevent reload from data_updated notification
+        // We'll use a ref to track this
+        justAcceptedWithTableDataRef.current = true;
+        setTimeout(() => {
+          justAcceptedWithTableDataRef.current = false;
+        }, 10000); // Prevent reload for 10 seconds after accepting (increased from 5)
+      } else {
+        // No table_data - refresh from server (normal case)
+        await loadProjectData(false);
+      }
+      
       const updatedChanges = await api.getPendingChanges(project.id, 'pending');
       setPendingChanges(updatedChanges);
       
@@ -393,8 +460,23 @@ const MainScreen = ({ project, role, name, onLogout }) => {
               // Clear the notification
               api.clearUserNotification(project.id, role, name).catch(() => {});
             } else if (response.command === 'data_updated' && response.data && !isEditing) {
-              // Refresh project data when updates are made
-              loadProjectData(false).catch(() => {});
+              // Parse notification data to check change_type
+              let notificationData = null;
+              try {
+                notificationData = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+              } catch (e) {
+                // Ignore parse errors
+              }
+              
+              const changeType = notificationData?.change_type;
+              
+              // Don't reload for row_move or row_duplicate changes because they require table_data
+              // to preserve order, and reloading from backend (ordered by ID) would lose the order.
+              // Also don't reload if we just accepted a change with table_data (to preserve order)
+              if (changeType !== 'row_move' && changeType !== 'row_duplicate' && !justAcceptedWithTableDataRef.current) {
+                // Refresh project data when updates are made
+                loadProjectData(false).catch(() => {});
+              }
               // Clear the notification
               api.clearUserNotification(project.id, role, name).catch(() => {});
             }
@@ -560,6 +642,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           activePhases={activePhases}
           handleTogglePhaseActivation={handleTogglePhaseActivation}
           periodicScripts={periodicScripts}
+          registerRowMove={registerRowMove}
+          registerRowDuplicate={registerRowDuplicate}
           setPeriodicScripts={setPeriodicScripts}
           currentClockSeconds={totalSeconds}
           isClockRunning={timer.isRunning || isUsingTargetTime}
@@ -644,11 +728,13 @@ const MainScreen = ({ project, role, name, onLogout }) => {
               <Box>
                 {(() => {
                   // Helper function to get global row number from row ID
+                  // Use originalTableData to get the original position before any moves
                   const getGlobalRowNumberFromId = (rowId) => {
                     if (!rowId) return null;
                     let globalCount = 0;
-                    for (let phaseIndex = 0; phaseIndex < currentTableData.length; phaseIndex++) {
-                      const phase = currentTableData[phaseIndex];
+                    // Use originalTableData to get the original position before moves
+                    for (let phaseIndex = 0; phaseIndex < originalTableData.length; phaseIndex++) {
+                      const phase = originalTableData[phaseIndex];
                       for (let rowIndex = 0; rowIndex < phase.rows.length; rowIndex++) {
                         globalCount++;
                         if (phase.rows[rowIndex].id === rowId) {
@@ -693,6 +779,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                             return null; // Skip already processed changes
                           }
                           
+                          // Skip table_data changes - they're metadata, not user-visible changes
+                          if (change.change_type === 'table_data') {
+                            return null;
+                          }
+                          
                           const changesData = typeof change.changes_data === 'string' 
                             ? JSON.parse(change.changes_data) 
                             : change.changes_data;
@@ -707,6 +798,26 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                               case 'row_delete':
                                 const deleteRowNumber = getGlobalRowNumberFromId(changesData.row_id);
                                 return `מחיקת שורה #${deleteRowNumber || changesData.row_id || 'N/A'}`;
+                              case 'row_duplicate':
+                                const duplicateRowNumber = getGlobalRowNumberFromId(changesData.source_row_id);
+                                return `שכפול שורה #${duplicateRowNumber || changesData.source_row_id || 'N/A'}`;
+                              case 'row_move':
+                                const moveRowNumber = getGlobalRowNumberFromId(changesData.row_id);
+                                const sourcePhase = changesData.source_phase_number || 'N/A';
+                                const targetPhase = changesData.target_phase_number || 'N/A';
+                                const targetPosition = changesData.target_position !== undefined ? changesData.target_position : null;
+                                const sourceRowIndex = changesData.source_row_index !== undefined ? changesData.source_row_index : null;
+                                if (sourcePhase === targetPhase && targetPosition !== null && sourceRowIndex !== null) {
+                                  const sourcePos = sourceRowIndex + 1; // Convert to 1-based
+                                  const targetPos = targetPosition + 1; // Convert to 1-based
+                                  return `העברת שורה #${moveRowNumber || changesData.row_id || 'N/A'} ממיקום ${sourcePos} למיקום ${targetPos} בשלב ${sourcePhase}`;
+                                } else if (sourcePhase === targetPhase && targetPosition !== null) {
+                                  return `העברת שורה #${moveRowNumber || changesData.row_id || 'N/A'} למיקום ${targetPosition + 1} בשלב ${sourcePhase}`;
+                                } else if (sourcePhase === targetPhase) {
+                                  return `שינוי מיקום שורה #${moveRowNumber || changesData.row_id || 'N/A'} בשלב ${sourcePhase}`;
+                                } else {
+                                  return `העברת שורה #${moveRowNumber || changesData.row_id || 'N/A'} משלב ${sourcePhase} לשלב ${targetPhase}`;
+                                }
                               case 'version':
                                 return `שינוי גרסה: ${changesData.new_version || 'N/A'} → ${changesData.old_version || 'N/A'}`;
                               case 'role_add':
