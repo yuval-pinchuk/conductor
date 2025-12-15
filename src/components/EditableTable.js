@@ -890,18 +890,15 @@ const EditableTable = ({
   }, []);
 
   const handleResetAllStatuses = useCallback(async () => {
-    // First confirmation: Reset all statuses
+    // Confirmation: Reset all statuses
     const confirmed = window.confirm('האם אתה בטוח שברצונך לאפס את כל הסטטוסים ל-N/A? פעולה זו לא ניתנת לביטול.');
     if (!confirmed) {
       return;
     }
     
-    // Second confirmation: Reset the log
-    const clearLog = window.confirm('האם אתה גם רוצה לאפס את יומן הפעולות? אם תבחר "ביטול", הפעולה תתועד ביומן.');
-    
     try {
-      // Call the new API endpoint
-      await api.resetAllStatuses(projectId, userName, userRole, clearLog);
+      // Call the API endpoint
+      await api.resetAllStatuses(projectId, userName, userRole);
       
       // Update local state
       setTableData(prevData => {

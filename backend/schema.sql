@@ -22,6 +22,7 @@
   `timer_last_start_time` DATETIME NULL,
   `timer_initial_offset` INT NOT NULL DEFAULT 0,
   `timer_target_datetime` DATETIME NULL,
+  `reset_epoch` INT NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
  ) ENGINE=InnoDB;
@@ -141,7 +142,7 @@ CREATE TABLE `messages` (
   INDEX `idx_messages_timestamp` (`timestamp`)
 ) ENGINE=InnoDB;
  
-CREATE TABLE 'action_logs' (
+CREATE TABLE `action_logs` (
     id INT AUTO_INCREMENT PRIMARY KEY,
     project_id INT NOT NULL,
     user_name VARCHAR(255) NOT NULL,
@@ -151,9 +152,11 @@ CREATE TABLE 'action_logs' (
     script_result BOOLEAN,
     row_id INT,
     phase_id INT,
+    reset_epoch INT NOT NULL DEFAULT 0,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_project_id (project_id),
     INDEX idx_timestamp (timestamp),
+    INDEX idx_reset_epoch (reset_epoch),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
  -- Optional seed data (comment out if not needed)

@@ -172,13 +172,12 @@ export const api = {
       method: 'DELETE',
       body: { user_role: userRole },
     }),
-  resetAllStatuses: (projectId, userName, userRole, clearLog) =>
+  resetAllStatuses: (projectId, userName, userRole) =>
     request(`/api/projects/${projectId}/reset-statuses`, {
       method: 'POST',
       body: {
         user_name: userName,
         user_role: userRole,
-        clear_log: clearLog,
       },
     }),
 };

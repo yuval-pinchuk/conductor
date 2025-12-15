@@ -24,6 +24,7 @@ class Project(db.Model):
     timer_last_start_time = db.Column(db.DateTime, nullable=True)  # Server timestamp when timer was started
     timer_initial_offset = db.Column(db.Integer, default=0, nullable=False)  # Total seconds elapsed before current run
     timer_target_datetime = db.Column(db.DateTime, nullable=True)  # Target datetime for countdown
+    reset_epoch = db.Column(db.Integer, default=0, nullable=False)  # Tracks current reset epoch for log differentiation
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -32,7 +33,6 @@ class Project(db.Model):
     roles = db.relationship('ProjectRole', backref='project', lazy=True, cascade='all, delete-orphan')
     periodic_scripts = db.relationship('PeriodicScript', backref='project', lazy=True, cascade='all, delete-orphan')
     messages = db.relationship('Message', backref='project', lazy=True, cascade='all, delete-orphan')
-    action_logs = db.relationship('ActionLog', backref='project', lazy=True, cascade='all, delete-orphan')
     action_logs = db.relationship('ActionLog', backref='project', lazy=True, cascade='all, delete-orphan')
     
     def set_manager_password(self, raw_password: str):
@@ -258,6 +258,7 @@ class ActionLog(db.Model):
     script_result = db.Column(db.Boolean, nullable=True)  # Only for script executions
     row_id = db.Column(db.Integer, nullable=True)  # For row-related actions
     phase_id = db.Column(db.Integer, nullable=True)  # For phase-related actions
+    reset_epoch = db.Column(db.Integer, default=0, nullable=False, index=True)  # Tracks which reset epoch this log belongs to
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     
     def to_dict(self):
@@ -272,5 +273,6 @@ class ActionLog(db.Model):
             'script_result': self.script_result,
             'row_id': self.row_id,
             'phase_id': self.phase_id,
+            'reset_epoch': self.reset_epoch,
             'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None
         }

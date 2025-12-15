@@ -264,7 +264,8 @@ def toggle_phase_active(phase_id):
             user_role, 
             phase_id, 
             phase.phase_number, 
-            phase.is_active
+            phase.is_active,
+            project.reset_epoch
         )
     
     return jsonify(phase.to_dict()), 200
@@ -349,8 +350,8 @@ def update_row(row_id):
             if old_status != new_status:
                 user_name = data.get('user_name', 'Unknown')
                 user_role = data.get('user_role', 'Unknown')
-                project_id = row.phase.project_id
-                ActionLogger.log_row_status_change(project_id, user_name, user_role, row_id, old_status, new_status)
+                project = row.phase.project
+                ActionLogger.log_row_status_change(project.id, user_name, user_role, row_id, old_status, new_status, project.reset_epoch)
             
             return jsonify(row.to_dict()), 200
         except Exception as e:
@@ -362,8 +363,8 @@ def update_row(row_id):
             if old_status != new_status:
                 user_name = data.get('user_name', 'Unknown')
                 user_role = data.get('user_role', 'Unknown')
-                project_id = row.phase.project_id
-                ActionLogger.log_row_status_change(project_id, user_name, user_role, row_id, old_status, new_status)
+                project = row.phase.project
+                ActionLogger.log_row_status_change(project.id, user_name, user_role, row_id, old_status, new_status, project.reset_epoch)
             return jsonify(row.to_dict()), 200
     else:
         # Normal update - let ON UPDATE CURRENT_TIMESTAMP work
@@ -381,8 +382,8 @@ def update_row(row_id):
     if old_status != new_status:
         user_name = data.get('user_name', 'Unknown')
         user_role = data.get('user_role', 'Unknown')
-        project_id = row.phase.project_id
-        ActionLogger.log_row_status_change(project_id, user_name, user_role, row_id, old_status, new_status)
+        project = row.phase.project
+        ActionLogger.log_row_status_change(project.id, user_name, user_role, row_id, old_status, new_status, project.reset_epoch)
     
     return jsonify(row.to_dict()), 200
 
@@ -426,9 +427,9 @@ def run_script(row_id):
     # Log script execution
     user_name = data.get('user_name', 'Unknown')
     user_role = data.get('user_role', 'Unknown')
-    project_id = row.phase.project_id
+    project = row.phase.project
     script_path = row.script or 'N/A'
-    ActionLogger.log_script_execution(project_id, user_name, user_role, row_id, script_path, result)
+    ActionLogger.log_script_execution(project.id, user_name, user_role, row_id, script_path, result, project.reset_epoch)
     
     return jsonify({'result': result}), 200
 
@@ -1700,8 +1701,8 @@ def get_action_logs(project_id):
         end_date = request.args.get('end_date')
         user_name = request.args.get('user_name')
         
-        # Build query
-        query = ActionLog.query.filter_by(project_id=project_id)
+        # Build query - only show logs from current reset epoch
+        query = ActionLog.query.filter_by(project_id=project_id, reset_epoch=project.reset_epoch)
         
         if action_type:
             query = query.filter_by(action_type=action_type)
@@ -1750,8 +1751,8 @@ def get_action_logs_pdf(project_id):
         from reportlab.lib.units import inch
         from io import BytesIO
         
-        # Get all action logs for the project
-        logs = ActionLog.query.filter_by(project_id=project_id).order_by(ActionLog.timestamp.asc()).all()
+        # Get action logs for the project - only from current reset epoch
+        logs = ActionLog.query.filter_by(project_id=project_id, reset_epoch=project.reset_epoch).order_by(ActionLog.timestamp.asc()).all()
         
         # Create PDF in memory
         buffer = BytesIO()
@@ -1779,12 +1780,12 @@ def get_action_logs_pdf(project_id):
         )
         
         # Title
-        title = Paragraph(f"Action Log - {project.name}", title_style)
+        title = Paragraph(f"Action Log - {project.name} (Reset Epoch {project.reset_epoch})", title_style)
         elements.append(title)
         elements.append(Spacer(1, 0.2*inch))
         
         # Project info
-        info_text = f"Project: {project.name}<br/>Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>Total Actions: {len(logs)}"
+        info_text = f"Project: {project.name}<br/>Reset Epoch: {project.reset_epoch}<br/>Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>Total Actions: {len(logs)}"
         info_para = Paragraph(info_text, styles['Normal'])
         elements.append(info_para)
         elements.append(Spacer(1, 0.2*inch))
@@ -1908,19 +1909,22 @@ def clear_action_logs(project_id):
 
 @api.route('/api/projects/<int:project_id>/reset-statuses', methods=['POST'])
 def reset_all_statuses(project_id):
-    """Reset all row statuses to N/A and optionally clear action logs (manager only)"""
+    """Reset all row statuses to N/A and increment reset epoch (manager only)"""
     project = Project.query.get_or_404(project_id)
     data = request.get_json() or {}
     
     # Verify manager access
     user_role = data.get('user_role', '').strip()
     user_name = data.get('user_name', '').strip()
-    clear_log = data.get('clear_log', False)
     
     if not user_role or user_role != project.manager_role:
         return jsonify({'error': 'Only managers can reset statuses'}), 403
     
     try:
+        # Increment reset epoch to start a new log session
+        project.reset_epoch += 1
+        new_reset_epoch = project.reset_epoch
+        
         # Get all rows for this project
         phases = Phase.query.filter_by(project_id=project_id).all()
         rows_count = 0
@@ -1934,19 +1938,13 @@ def reset_all_statuses(project_id):
         
         db.session.commit()
         
-        # Handle log clearing or logging
-        if clear_log:
-            # Clear all action logs
-            ActionLog.query.filter_by(project_id=project_id).delete()
-            db.session.commit()
-        else:
-            # Log the reset_statuses action
-            ActionLogger.log_reset_statuses(project_id, user_name, user_role, rows_count)
+        # Log the reset_statuses action with the new reset_epoch
+        ActionLogger.log_reset_statuses(project_id, user_name, user_role, rows_count, new_reset_epoch)
         
         return jsonify({
             'message': 'All statuses reset successfully',
             'rows_reset': rows_count,
-            'log_cleared': clear_log
+            'reset_epoch': new_reset_epoch
         }), 200
         
     except Exception as e:
