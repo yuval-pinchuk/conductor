@@ -803,22 +803,15 @@ def create_pending_change(project_id):
     
     created_changes = []
     
+    # Track whether this submission includes structural changes that require table_data
+    # (row_move, row_duplicate, row_add, row_delete, etc.)
+    has_structural_changes = False
+    
     # Store table_data with the submission if provided (for preserving row order)
+    # We will only create a PendingChange for it if structural changes exist
     table_data_for_submission = None
     if 'table_data' in changes_data:
         table_data_for_submission = changes_data['table_data']
-        # Create a special PendingChange entry to store table_data
-        table_data_change = PendingChange(
-            project_id=project_id,
-            submission_id=submission_id,
-            submitted_by=submitted_by,
-            submitted_by_role=submitted_by_role,
-            change_type='table_data',
-            changes_data=json.dumps({'table_data': table_data_for_submission}),
-            status='pending'
-        )
-        db.session.add(table_data_change)
-        created_changes.append(table_data_change)
     
     try:
         # Get current project data for comparison
@@ -883,6 +876,7 @@ def create_pending_change(project_id):
                     )
                     db.session.add(row_move)
                     created_changes.append(row_move)
+                    has_structural_changes = True
             
             # Process row_duplicate operations
             for dup_op in explicit_ops.get('row_duplicates', []):
@@ -912,6 +906,7 @@ def create_pending_change(project_id):
                     )
                     db.session.add(row_duplicate)
                     created_changes.append(row_duplicate)
+                    has_structural_changes = True
         
         # Process table data changes (rows)
         if 'table_data' in changes_data:
@@ -969,6 +964,7 @@ def create_pending_change(project_id):
                         )
                         db.session.add(row_add)
                         created_changes.append(row_add)
+                        has_structural_changes = True
                 
                 # Find modified rows (skip rows that were moved - position changes don't count as modifications)
                 for new_row in new_rows:
@@ -1047,6 +1043,7 @@ def create_pending_change(project_id):
                     )
                     db.session.add(row_delete)
                     created_changes.append(row_delete)
+                    has_structural_changes = True
         
         # Process role changes (only if explicitly provided)
         # Note: Roles are typically derived from rows, so we only process explicit role changes
@@ -1085,6 +1082,21 @@ def create_pending_change(project_id):
                     )
                     db.session.add(role_delete)
                     created_changes.append(role_delete)
+        
+        # After processing all changes, conditionally create table_data change
+        # Only when structural changes exist and table_data was provided
+        if has_structural_changes and table_data_for_submission is not None:
+            table_data_change = PendingChange(
+                project_id=project_id,
+                submission_id=submission_id,
+                submitted_by=submitted_by,
+                submitted_by_role=submitted_by_role,
+                change_type='table_data',
+                changes_data=json.dumps({'table_data': table_data_for_submission}),
+                status='pending'
+            )
+            db.session.add(table_data_change)
+            created_changes.append(table_data_change)
         
         # Process periodic script changes
         if 'periodic_scripts' in changes_data:
