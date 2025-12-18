@@ -77,6 +77,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Pending Changes State
   const [pendingChanges, setPendingChanges] = useState([]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [inactiveUserDialogOpen, setInactiveUserDialogOpen] = useState(false);
   
   // Track explicit move/duplicate operations to prevent index change notifications
   const explicitOperationsRef = useRef({ row_moves: [], row_duplicates: [] });
@@ -259,10 +260,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
   // Send heartbeat every 30 seconds to keep session alive and allow stale session cleanup
   useInterval(() => {
-    if (isVisible && project.id && name && role) {
-      api.heartbeat(project.id, name, role).catch(() => {
-        // Silently fail - heartbeat is not critical
-      });
+    if (isVisible && project.id && name && role && !inactiveUserDialogOpen) {
+      api.heartbeat(project.id, name, role)
+        .catch((error) => {
+          // If heartbeat fails with 404, user is inactive
+          if (error.status === 404 || error.message?.includes('Active user not found')) {
+            setInactiveUserDialogOpen(true);
+          }
+          // Silently fail for other errors
+        });
     }
   }, 30000); // Heartbeat every 30 seconds
 
@@ -457,6 +463,12 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     socket.on('pending_changes_updated', (data) => {
       if (data.project_id === project.id && isManager) {
         fetchPendingChanges();
+      }
+    });
+
+    socket.on('user_deactivated', (data) => {
+      if (data.project_id === project.id && data.role === role && data.name === name) {
+        setInactiveUserDialogOpen(true);
       }
     });
 
@@ -1095,6 +1107,32 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           </DialogActions>
         </Dialog>
       )}
+
+      {/* Inactive User Dialog */}
+      <Dialog
+        open={inactiveUserDialogOpen}
+        onClose={() => {}} // Prevent closing without clicking OK
+        disableEscapeKeyDown
+      >
+        <DialogTitle>המשתמש לא פעיל</DialogTitle>
+        <DialogContent>
+          <Typography>
+            המשתמש שלך הוגדר כלא פעיל. נדרש להתחבר מחדש.
+          </Typography>
+        </DialogContent>
+        <DialogActions style={{ direction: 'rtl' }}>
+          <Button
+            onClick={() => {
+              setInactiveUserDialogOpen(false);
+              onLogout();
+            }}
+            variant="contained"
+            color="primary"
+          >
+            אישור
+          </Button>
+        </DialogActions>
+      </Dialog>
       
       {/* ProjectChat - Always rendered to keep socket connection active */}
       {project && (

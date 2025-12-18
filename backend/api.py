@@ -651,8 +651,8 @@ def get_active_logins(project_id):
     """Get all active logins for a project, auto-deactivating stale sessions"""
     from datetime import timedelta
     
-    # Auto-deactivate users who haven't sent a heartbeat in 2+ minutes
-    stale_threshold = datetime.utcnow() - timedelta(minutes=2)
+    # Auto-deactivate users who haven't sent a heartbeat in 2+ hours
+    stale_threshold = datetime.utcnow() - timedelta(hours=2)
     stale_users = User.query.filter(
         User.project_id == project_id,
         User.is_active == True,
@@ -664,11 +664,21 @@ def get_active_logins(project_id):
         user.is_active = False
     
     if stale_users:
-        db.session.commit()
-        # Emit Socket.IO event for active logins update
         socketio = get_socketio()
         if socketio:
+            # Emit to each deactivated user individually
+            for user in stale_users:
+                user_room = f'user_{project_id}_{user.role}_{user.name}'
+                socketio.emit('user_deactivated', {
+                    'project_id': project_id,
+                    'role': user.role,
+                    'name': user.name
+                }, room=user_room)
+            
+            # Emit general active logins update
             socketio.emit('active_logins_updated', {'project_id': project_id}, room=f'project_{project_id}')
+        
+        db.session.commit()
     
     active_users = User.query.filter_by(project_id=project_id, is_active=True).all()
     return jsonify([user.to_dict() for user in active_users]), 200
@@ -676,7 +686,7 @@ def get_active_logins(project_id):
 
 @api.route('/api/projects/<int:project_id>/login', methods=['POST'])
 def register_login(project_id):
-    """Register a user login - marks role as taken"""
+    """Register a user login - marks role as taken. Reactivates inactive users."""
     project = Project.query.get_or_404(project_id)
     data = request.get_json()
     
@@ -686,7 +696,7 @@ def register_login(project_id):
     if not name or not role:
         return jsonify({'error': 'Name and role are required'}), 400
     
-    # Check if role is already taken
+    # Check if role is already taken by an active user
     existing_active = User.query.filter_by(
         project_id=project_id, 
         role=role, 
@@ -698,7 +708,7 @@ def register_login(project_id):
             'error': f'Role "{role}" is already in use by {existing_active.name}'
         }), 409
     
-    # Create or update user record
+    # Create or update user record (reactivates inactive users)
     user = User.query.filter_by(
         project_id=project_id,
         role=role,
@@ -706,7 +716,7 @@ def register_login(project_id):
     ).first()
     
     if user:
-        # Update existing user
+        # Reactivate existing user (even if they were previously inactive)
         user.is_active = True
         user.last_login = datetime.utcnow()
         user.last_seen = datetime.utcnow()
