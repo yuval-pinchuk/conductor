@@ -1,6 +1,6 @@
 // src/components/EditableTable.js
 
-import React, { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback, memo, useDeferredValue } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
   Paper, IconButton, TextField, Button,
@@ -484,7 +484,8 @@ const EditableTable = ({
     projectId,
     userName,
     registerRowMove,
-    registerRowDuplicate }) => {
+    registerRowDuplicate,
+    onProcessNotification }) => {
   
   const [newRole, setNewRole] = useState('');
   const [userInfoModal, setUserInfoModal] = useState({ open: false, row: null, phaseIndex: null, rowIndex: null });
@@ -509,14 +510,14 @@ const EditableTable = ({
   // Progressive rendering: render rows in batches when entering edit mode
   useEffect(() => {
     if (isEditing) {
-      // Render first batch immediately (visible rows + buffer for smooth scrolling)
-      const initialBatch = Math.min(50, totalRowCount);
+      // Render first batch immediately (increased from 50 to 150 for faster initial render)
+      const initialBatch = Math.min(150, totalRowCount);
       setRenderedRowCount(initialBatch);
       
       // Render remaining rows progressively in background using requestIdleCallback
       if (totalRowCount > initialBatch) {
         let currentCount = initialBatch;
-        const batchSize = 25; // Larger batches for faster completion
+        const batchSize = 50; // Increased from 25 to 50 for faster completion
         let cancelled = false;
         let timeoutId = null;
         let idleId = null;
@@ -600,26 +601,31 @@ const EditableTable = ({
     return map;
   }, [tableData]);
 
+  // Defer expensive computations to keep UI responsive during transitions
+  const deferredTableData = useDeferredValue(tableData);
+  const deferredActivePhases = useDeferredValue(activePhases);
+  const deferredCurrentClockSeconds = useDeferredValue(currentClockSeconds);
+
   // Pre-calculate parsed time values for all rows (memoized)
+  // Use deferredTableData to keep in sync with rowStylesMap
   const parsedTimeMap = useMemo(() => {
     const map = new Map();
-    tableData.forEach((phase, phaseIndex) => {
+    deferredTableData.forEach((phase, phaseIndex) => {
       phase.rows.forEach((row, rowIndex) => {
         const key = `${phaseIndex}-${rowIndex}`;
         map.set(key, parseTimeToSeconds(row.time));
       });
     });
     return map;
-  }, [tableData, parseTimeToSeconds]);
-
-  // No longer needed - using native select instead of MUI Select
+  }, [deferredTableData, parseTimeToSeconds]);
 
   // Pre-calculate row styles for all rows (memoized)
+  // Uses deferred values to allow React to prioritize rendering over style calculations
   const rowStylesMap = useMemo(() => {
     const stylesMap = new Map();
     
-    tableData.forEach((phase, phaseIndex) => {
-      const isPhaseActive = !!activePhases[phase.phase];
+    deferredTableData.forEach((phase, phaseIndex) => {
+      const isPhaseActive = !!deferredActivePhases[phase.phase];
       
       phase.rows.forEach((row, rowIndex) => {
         const key = `${phaseIndex}-${rowIndex}`;
@@ -631,7 +637,7 @@ const EditableTable = ({
         const hasClockPassedRowTime = Boolean(
           isClockRunning &&
           rowTimeSeconds !== null &&
-          currentClockSeconds >= rowTimeSeconds
+          deferredCurrentClockSeconds >= rowTimeSeconds
         );
         const shouldHighlightOverdue = isStatusUnset && hasClockPassedRowTime;
         
@@ -683,7 +689,7 @@ const EditableTable = ({
     });
     
     return stylesMap;
-  }, [tableData, userRole, isManager, isClockRunning, currentClockSeconds, activePhases, parsedTimeMap]);
+  }, [deferredTableData, userRole, isManager, isClockRunning, deferredCurrentClockSeconds, deferredActivePhases, parsedTimeMap]);
 
   // Calculate total rows before current phase for continuous numbering (memoized helper)
   const getGlobalRowNumber = useCallback((phaseIndex, rowIndex) => {
@@ -1054,6 +1060,13 @@ const EditableTable = ({
       }
     }
   }, []); // No dependencies - uses functional state update
+
+  // Expose processNotification to parent via callback prop
+  useEffect(() => {
+    if (onProcessNotification) {
+      onProcessNotification(processNotification);
+    }
+  }, [processNotification, onProcessNotification]);
 
   // Cleanup blink interval on unmount
   useEffect(() => {

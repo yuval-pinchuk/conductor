@@ -59,6 +59,17 @@ def create_app():
             join_room(room)
             print(f'Client joined project room: {room}')
     
+    @socketio.on('join_user_room')
+    def handle_join_user_room(data):
+        """Join a room for user-specific notifications"""
+        project_id = data.get('project_id')
+        role = data.get('role', '').strip()
+        name = data.get('name', '').strip()
+        if project_id and role and name:
+            room = f'user_{project_id}_{role}_{name}'
+            join_room(room)
+            print(f'Client joined user room: {room}')
+    
     @socketio.on('requestStart')
     def handle_request_start(data):
         """Handle timer start request"""

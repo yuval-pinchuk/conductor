@@ -38,6 +38,15 @@ const formatTime = (totalSeconds) => {
   return (isNegative ? '-' : '+') + hours + ':' + minutes + ':' + seconds;
 };
 
+// Helper function for efficient deep copying of table data
+// Uses manual copy instead of structuredClone for better compatibility
+const deepCloneTableData = (data) => {
+  return data.map(phase => ({
+    ...phase,
+    rows: phase.rows.map(row => ({ ...row }))
+  }));
+};
+
 const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === project.manager_role;
   const isVisible = usePageVisibility();
@@ -107,6 +116,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const lastReadMessageIndexRef = useRef(-1);
   const processedMessageIdsRef = useRef(new Set());
+  const processNotificationRef = useRef(null);
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -198,7 +208,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       }));
       
       setCurrentTableData(tableData);
-      setOriginalTableData(JSON.parse(JSON.stringify(tableData)));
+      // Use efficient manual copy instead of structuredClone (faster and more compatible)
+      setOriginalTableData(deepCloneTableData(tableData));
       
       // Set active phases
       const activePhasesMap = {};
@@ -411,6 +422,10 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
     socket.on('connect', () => {
       socket.emit('join_project_room', { project_id: project.id });
+      // Join user-specific room for instant notifications
+      if (project.id && role && name) {
+        socket.emit('join_user_room', { project_id: project.id, role, name });
+      }
     });
 
     socket.on('phases_updated', (data) => {
@@ -427,10 +442,28 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       }
     });
 
+    socket.on('user_notification', (data) => {
+      // Handle real-time user notifications (e.g., manager nudge)
+      if (data.project_id === project.id && data.command && data.data && !isManager) {
+        // Process notification immediately via EditableTable's processNotification
+        if (processNotificationRef.current) {
+          processNotificationRef.current(data.command, data.data);
+          // Clear notification from database after processing
+          api.clearUserNotification(project.id, role, name).catch(() => {});
+        }
+      }
+    });
+
+    socket.on('pending_changes_updated', (data) => {
+      if (data.project_id === project.id && isManager) {
+        fetchPendingChanges();
+      }
+    });
+
     return () => {
       socket.disconnect();
     };
-  }, [project.id, isEditing, loadProjectData, isManager, role, fetchPendingChanges]);
+  }, [project.id, isEditing, loadProjectData, isManager, role, name, fetchPendingChanges]);
 
   // Handle accepting a pending change
   const handleAcceptPendingChange = async (changeId) => {
@@ -444,7 +477,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         // This preserves the correct row order
         
         setCurrentTableData(response.table_data);
-        setOriginalTableData(JSON.parse(JSON.stringify(response.table_data)));
+        // Use efficient manual copy instead of structuredClone (faster and more compatible)
+        setOriginalTableData(deepCloneTableData(response.table_data));
         
         // Also update active phases
         const activePhasesMap = {};
@@ -495,6 +529,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   };
 
   // Poll for notifications (pending changes for managers, data updates for all users)
+  // Socket.IO handles real-time user notifications, polling is fallback only
   useEffect(() => {
     if (project.id && role && name) {
       const interval = setInterval(() => {
@@ -506,6 +541,14 @@ const MainScreen = ({ project, role, name, onLogout }) => {
               setReviewModalOpen(true);
               // Clear the notification
               api.clearUserNotification(project.id, role, name).catch(() => {});
+            } else if (response.command === 'show_modal' && response.data && !isManager) {
+              // Fallback: Handle show_modal notification if Socket.IO missed it
+              // Socket.IO should handle this in real-time, but polling ensures reliability
+              if (processNotificationRef.current) {
+                processNotificationRef.current(response.command, response.data);
+                // Clear the notification after processing
+                api.clearUserNotification(project.id, role, name).catch(() => {});
+              }
             } else if (response.command === 'data_updated' && response.data && !isEditing) {
               // Parse notification data to check change_type
               let notificationData = null;
@@ -531,17 +574,17 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           .catch(err => {
             // Silently fail
           });
-      }, 30000); // Poll every 30 seconds as fallback - Socket.IO handles real-time notifications
+      }, 60000); // Poll every 60 seconds as fallback - Socket.IO handles real-time notifications
 
       return () => clearInterval(interval);
     }
-  }, [isManager, project.id, role, name, fetchPendingChanges, loadProjectData, isEditing]);
+  }, [isManager, project.id, role, name, fetchPendingChanges, loadProjectData, isEditing, processNotificationRef]);
 
   // Fetch pending changes on mount and periodically
   useEffect(() => {
     if (isManager) {
       fetchPendingChanges();
-      const interval = setInterval(fetchPendingChanges, 5000);
+      const interval = setInterval(fetchPendingChanges, 60000); // Poll every 60 seconds as fallback - Socket.IO handles real-time updates
       return () => clearInterval(interval);
     }
   }, [isManager, fetchPendingChanges]);
@@ -699,6 +742,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           activeLogins={activeLogins}
           projectId={project.id}
           userName={name}
+          onProcessNotification={(callback) => { processNotificationRef.current = callback; }}
         />
         
         <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>

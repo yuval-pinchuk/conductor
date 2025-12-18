@@ -24,6 +24,8 @@ import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import * as XLSX from 'xlsx';
 import { api } from '../api/conductorApi';
+import { io } from 'socket.io-client';
+import { API_BASE_URL } from '../config';
 
 const DEFAULT_TIME = '00:00:00';
 const DEFAULT_DURATION = '00:00';
@@ -117,7 +119,7 @@ const LoginScreen = ({ onLogin }) => {
     }
   }, [selectedProjectId]);
 
-  // Poll for active logins every 2 seconds
+  // Poll for active logins every 60 seconds as fallback - Socket.IO handles real-time updates
   useEffect(() => {
     if (!selectedProjectId) return;
     
@@ -129,9 +131,40 @@ const LoginScreen = ({ onLogin }) => {
         .catch(err => {
           // Silently fail - polling is not critical
         });
-    }, 2000);
+    }, 60000); // Changed from 2000 to 60000
 
     return () => clearInterval(interval);
+  }, [selectedProjectId]);
+
+  // Socket.IO for real-time active logins updates
+  useEffect(() => {
+    if (!selectedProjectId) return;
+
+    const socket = io(API_BASE_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true
+    });
+
+    socket.on('connect', () => {
+      socket.emit('join_project_room', { project_id: selectedProjectId });
+    });
+
+    socket.on('active_logins_updated', (data) => {
+      if (data.project_id === parseInt(selectedProjectId)) {
+        // Fetch updated active logins
+        api.getActiveLogins(selectedProjectId)
+          .then(logins => {
+            setActiveLogins(logins);
+          })
+          .catch(() => {
+            // Silently fail
+          });
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
   }, [selectedProjectId]);
 
   useEffect(() => {

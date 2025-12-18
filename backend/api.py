@@ -3,6 +3,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog
 from sqlalchemy import func, text
+from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
 import json
 import uuid
@@ -217,7 +218,8 @@ def delete_project(project_id):
 @api.route('/api/projects/<int:project_id>/phases', methods=['GET'])
 def get_phases(project_id):
     """Get all phases for a project"""
-    phases = Phase.query.filter_by(project_id=project_id).order_by(Phase.phase_number).all()
+    # Use joinedload to eagerly load rows and avoid N+1 queries
+    phases = Phase.query.options(joinedload(Phase.rows)).filter_by(project_id=project_id).order_by(Phase.phase_number).all()
     return jsonify([phase.to_dict() for phase in phases]), 200
 
 
@@ -663,6 +665,10 @@ def get_active_logins(project_id):
     
     if stale_users:
         db.session.commit()
+        # Emit Socket.IO event for active logins update
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('active_logins_updated', {'project_id': project_id}, room=f'project_{project_id}')
     
     active_users = User.query.filter_by(project_id=project_id, is_active=True).all()
     return jsonify([user.to_dict() for user in active_users]), 200
@@ -717,6 +723,12 @@ def register_login(project_id):
         db.session.add(user)
     
     db.session.commit()
+    
+    # Emit Socket.IO event for active logins update
+    socketio = get_socketio()
+    if socketio:
+        socketio.emit('active_logins_updated', {'project_id': project_id}, room=f'project_{project_id}')
+    
     return jsonify(user.to_dict()), 200
 
 
@@ -747,6 +759,12 @@ def register_logout(project_id):
     if user:
         user.is_active = False
         db.session.commit()
+        
+        # Emit Socket.IO event for active logins update
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('active_logins_updated', {'project_id': project_id}, room=f'project_{project_id}')
+        
         return jsonify({'message': 'Logout successful'}), 200
     else:
         return jsonify({'error': 'Active login not found'}), 404
@@ -807,6 +825,16 @@ def create_user_notification(project_id):
     user.notification_timestamp = datetime.utcnow()
     db.session.commit()
     
+    # Emit Socket.IO event to user-specific room for instant notification
+    socketio = get_socketio()
+    if socketio:
+        user_room = f'user_{project_id}_{target_role}_{user.name}'
+        socketio.emit('user_notification', {
+            'project_id': project_id,
+            'command': command,
+            'data': notification_data
+        }, room=user_room)
+    
     return jsonify(user.to_dict()), 200
 
 
@@ -834,9 +862,12 @@ def get_user_notification(project_id):
             'timestamp': None
         }), 200
     
+    notification_command = user.notification_command
+    notification_data = json.loads(user.notification_data) if user.notification_data else None
+    
     return jsonify({
-        'command': user.notification_command,
-        'data': json.loads(user.notification_data) if user.notification_data else None,
+        'command': notification_command,
+        'data': notification_data,
         'timestamp': user.notification_timestamp.isoformat() if user.notification_timestamp else None
     }), 200
 
@@ -1777,6 +1808,7 @@ def accept_pending_change(project_id, change_id):
         socketio = get_socketio()
         if socketio:
             socketio.emit('phases_updated', {'project_id': project_id}, room=f'project_{project_id}')
+            socketio.emit('pending_changes_updated', {'project_id': project_id}, room=f'project_{project_id}')
         
         return jsonify({
             'message': 'Change accepted',
@@ -1843,6 +1875,7 @@ def decline_pending_change(project_id, change_id):
         socketio = get_socketio()
         if socketio:
             socketio.emit('phases_updated', {'project_id': project_id}, room=f'project_{project_id}')
+            socketio.emit('pending_changes_updated', {'project_id': project_id}, room=f'project_{project_id}')
         
         return jsonify({
             'message': 'Change declined',

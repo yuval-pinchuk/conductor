@@ -9,11 +9,8 @@
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/api.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/api.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/migration_submission_id.sql" beforeDir="false" afterPath="$PROJECT_DIR$/backend/migration_submission_id.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/module.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/module.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/schema.sql" beforeDir="false" afterPath="$PROJECT_DIR$/backend/schema.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/api/conductorApi.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/api/conductorApi.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/components/EditableTable.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/EditableTable.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/components/LoginScreen.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/LoginScreen.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/components/MainScreen.js" beforeDir="false" afterPath="$PROJECT_DIR$/src/components/MainScreen.js" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
