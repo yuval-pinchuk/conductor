@@ -50,6 +50,15 @@ def create_app():
             join_room(room)
             print(f'Client joined room: {room}')
     
+    @socketio.on('join_project_room')
+    def handle_join_project_room(data):
+        """Join a room for project data updates (phases, rows, etc.)"""
+        project_id = data.get('project_id')
+        if project_id:
+            room = f'project_{project_id}'
+            join_room(room)
+            print(f'Client joined project room: {room}')
+    
     @socketio.on('requestStart')
     def handle_request_start(data):
         """Handle timer start request"""

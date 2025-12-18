@@ -5,9 +5,12 @@ import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
 import ProjectChat from './ProjectChat';
+import usePageVisibility from '../hooks/usePageVisibility';
 import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '../api/conductorApi';
+import { io } from 'socket.io-client';
+import { API_BASE_URL } from '../config';
 
 const useInterval = (callback, delay) => {
   const savedCallback = React.useRef();
@@ -37,6 +40,7 @@ const formatTime = (totalSeconds) => {
 
 const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === project.manager_role;
+  const isVisible = usePageVisibility();
   const [projectDetails, setProjectDetails] = useState(project);
   
   // State for the project version
@@ -231,16 +235,25 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     loadProjectData();
   }, [loadProjectData]);
 
-  // Poll for project data updates (when not editing)
-  // This ensures users see changes made by managers or other users
+  // Poll for project data updates as fallback (Socket.IO handles real-time updates)
+  // This ensures data syncs even if Socket.IO connection drops
   useInterval(() => {
-    if (!isEditing && !isLoadingData && !justAcceptedWithTableDataRef.current) {
+    if (isVisible && !isEditing && !isLoadingData && !justAcceptedWithTableDataRef.current) {
       // Don't reload if we just accepted a change with table_data (to preserve order)
       loadProjectData(false).catch(err => {
           // Silently fail - polling is not critical
         });
     }
-  }, 5000); // Poll every 5 seconds
+  }, 60000); // Poll every 60 seconds as fallback - Socket.IO handles real-time
+
+  // Send heartbeat every 30 seconds to keep session alive and allow stale session cleanup
+  useInterval(() => {
+    if (isVisible && project.id && name && role) {
+      api.heartbeat(project.id, name, role).catch(() => {
+        // Silently fail - heartbeat is not critical
+      });
+    }
+  }, 30000); // Heartbeat every 30 seconds
 
   const handleSave = async () => {
     if (isSaving) return;
@@ -385,6 +398,40 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   }, [isManager, project.id]);
 
+  // Socket.IO listener for real-time project data updates
+  useEffect(() => {
+    if (!project.id) return;
+
+    const socket = io(API_BASE_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5
+    });
+
+    socket.on('connect', () => {
+      socket.emit('join_project_room', { project_id: project.id });
+    });
+
+    socket.on('phases_updated', (data) => {
+      if (data.project_id === project.id && !isEditing) {
+        // Reload data when phases are updated (status changes, manager approvals, etc.)
+        loadProjectData(false).catch(() => {});
+      }
+    });
+
+    socket.on('pending_changes_notification', (data) => {
+      if (data.project_id === project.id && isManager && data.manager_role === role) {
+        fetchPendingChanges();
+        setReviewModalOpen(true);
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [project.id, isEditing, loadProjectData, isManager, role, fetchPendingChanges]);
+
   // Handle accepting a pending change
   const handleAcceptPendingChange = async (changeId) => {
     try {
@@ -484,7 +531,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           .catch(err => {
             // Silently fail
           });
-      }, 2000);
+      }, 30000); // Poll every 30 seconds as fallback - Socket.IO handles real-time notifications
 
       return () => clearInterval(interval);
     }
@@ -655,13 +702,25 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         />
         
         <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>
-          <Button
-            variant="outlined"
-            color="secondary"
-            onClick={() => onLogout(project.id, name, role)}
-          >
-            התנתק
-          </Button>
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={() => onLogout(project.id, name, role)}
+            >
+              התנתק
+            </Button>
+            
+            {isManager && pendingChanges.length > 0 && (
+              <Button
+                variant="contained"
+                color="warning"
+                onClick={() => setReviewModalOpen(true)}
+              >
+                {pendingChanges.length} בקשות ממתינות
+              </Button>
+            )}
+          </Box>
           
           <Box sx={{ display: 'flex', gap: 2, direction: 'rtl' }}>
           {isManager && (
@@ -696,17 +755,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             )}
           </Box>
         </Box>
-
-        {isManager && pendingChanges.length > 0 && (
-          <Button
-            variant="contained"
-            color="warning"
-            onClick={() => setReviewModalOpen(true)}
-            sx={{ mt: 2 }}
-          >
-            {pendingChanges.length} בקשות ממתינות
-          </Button>
-        )}
       </Box>
 
       {/* Pending Changes Review Modal (Manager only) */}

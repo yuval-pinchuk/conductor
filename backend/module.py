@@ -170,6 +170,7 @@ class User(db.Model):
     notification_data = db.Column(db.Text, nullable=True)  # JSON string with notification data
     notification_timestamp = db.Column(db.DateTime, nullable=True)
     last_login = db.Column(db.DateTime, nullable=True)
+    last_seen = db.Column(db.DateTime, nullable=True)  # Updated by heartbeat, used to detect stale sessions
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
@@ -182,7 +183,8 @@ class User(db.Model):
             'notification_command': self.notification_command,
             'notification_data': self.notification_data,
             'notification_timestamp': self.notification_timestamp.isoformat() if self.notification_timestamp else None,
-            'last_login': self.last_login.isoformat() if self.last_login else None
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None
         }
 
 

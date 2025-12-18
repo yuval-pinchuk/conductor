@@ -97,6 +97,7 @@ CREATE TABLE `users` (
   `notification_data` TEXT NULL,
   `notification_timestamp` DATETIME NULL,
   `last_login` DATETIME NULL,
+  `last_seen` DATETIME NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT `fk_users_project`
     FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)

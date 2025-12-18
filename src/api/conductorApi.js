@@ -120,6 +120,11 @@ export const api = {
       method: 'POST',
       body: { name, role },
     }),
+  heartbeat: (projectId, name, role) =>
+    request(`/api/projects/${projectId}/heartbeat`, {
+      method: 'POST',
+      body: { name, role },
+    }),
 
   // User notifications
   createUserNotification: (projectId, targetRole, command, data = {}) =>

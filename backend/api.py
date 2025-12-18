@@ -1,6 +1,6 @@
 # backend/api.py
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog
 from sqlalchemy import func, text
 from datetime import datetime, timedelta
@@ -9,6 +9,17 @@ import uuid
 from action_logger import ActionLogger
 
 api = Blueprint('api', __name__)
+
+
+def get_socketio():
+    """Get socketio instance from Flask app context"""
+    try:
+        if hasattr(current_app, 'extensions') and 'socketio' in current_app.extensions:
+            return current_app.extensions['socketio']
+        from main import socketio
+        return socketio
+    except (ImportError, RuntimeError):
+        return None
 
 
 # ==================== PROJECT ENDPOINTS ====================
@@ -268,6 +279,11 @@ def toggle_phase_active(phase_id):
             project.reset_epoch
         )
     
+    # Emit real-time update to all clients
+    socketio = get_socketio()
+    if socketio:
+        socketio.emit('phases_updated', {'project_id': phase.project_id}, room=f'project_{phase.project_id}')
+    
     return jsonify(phase.to_dict()), 200
 
 
@@ -353,6 +369,12 @@ def update_row(row_id):
                 project = row.phase.project
                 ActionLogger.log_row_status_change(project.id, user_name, user_role, row_id, old_status, new_status, project.reset_epoch)
             
+            # Emit real-time update
+            project = row.phase.project
+            socketio = get_socketio()
+            if socketio:
+                socketio.emit('phases_updated', {'project_id': project.id}, room=f'project_{project.id}')
+            
             return jsonify(row.to_dict()), 200
         except Exception as e:
             db.session.rollback()
@@ -365,6 +387,13 @@ def update_row(row_id):
                 user_role = data.get('user_role', 'Unknown')
                 project = row.phase.project
                 ActionLogger.log_row_status_change(project.id, user_name, user_role, row_id, old_status, new_status, project.reset_epoch)
+            
+            # Emit real-time update
+            project = row.phase.project
+            socketio = get_socketio()
+            if socketio:
+                socketio.emit('phases_updated', {'project_id': project.id}, room=f'project_{project.id}')
+            
             return jsonify(row.to_dict()), 200
     else:
         # Normal update - let ON UPDATE CURRENT_TIMESTAMP work
@@ -384,6 +413,12 @@ def update_row(row_id):
         user_role = data.get('user_role', 'Unknown')
         project = row.phase.project
         ActionLogger.log_row_status_change(project.id, user_name, user_role, row_id, old_status, new_status, project.reset_epoch)
+    
+    # Emit real-time update
+    project = row.phase.project
+    socketio = get_socketio()
+    if socketio:
+        socketio.emit('phases_updated', {'project_id': project.id}, room=f'project_{project.id}')
     
     return jsonify(row.to_dict()), 200
 
@@ -568,6 +603,12 @@ def update_table_data(project_id):
                 db.session.add(row)
         
         db.session.commit()
+        
+        # Emit real-time update to all clients
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('phases_updated', {'project_id': project_id}, room=f'project_{project_id}')
+        
         return jsonify({'message': 'Table data updated'}), 200
     except Exception as e:
         db.session.rollback()
@@ -605,7 +646,24 @@ def update_periodic_scripts_bulk(project_id):
 
 @api.route('/api/projects/<int:project_id>/active-logins', methods=['GET'])
 def get_active_logins(project_id):
-    """Get all active logins for a project"""
+    """Get all active logins for a project, auto-deactivating stale sessions"""
+    from datetime import timedelta
+    
+    # Auto-deactivate users who haven't sent a heartbeat in 2+ minutes
+    stale_threshold = datetime.utcnow() - timedelta(minutes=2)
+    stale_users = User.query.filter(
+        User.project_id == project_id,
+        User.is_active == True,
+        User.last_seen != None,
+        User.last_seen < stale_threshold
+    ).all()
+    
+    for user in stale_users:
+        user.is_active = False
+    
+    if stale_users:
+        db.session.commit()
+    
     active_users = User.query.filter_by(project_id=project_id, is_active=True).all()
     return jsonify([user.to_dict() for user in active_users]), 200
 
@@ -645,6 +703,7 @@ def register_login(project_id):
         # Update existing user
         user.is_active = True
         user.last_login = datetime.utcnow()
+        user.last_seen = datetime.utcnow()
     else:
         # Create new user
         user = User(
@@ -652,7 +711,8 @@ def register_login(project_id):
             role=role,
             name=name,
             is_active=True,
-            last_login=datetime.utcnow()
+            last_login=datetime.utcnow(),
+            last_seen=datetime.utcnow()
         )
         db.session.add(user)
     
@@ -690,6 +750,31 @@ def register_logout(project_id):
         return jsonify({'message': 'Logout successful'}), 200
     else:
         return jsonify({'error': 'Active login not found'}), 404
+
+
+@api.route('/api/projects/<int:project_id>/heartbeat', methods=['POST'])
+def heartbeat(project_id):
+    """Update last_seen timestamp for a user to indicate they're still active"""
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    role = (data.get('role') or '').strip()
+    
+    if not name or not role:
+        return jsonify({'error': 'Name and role are required'}), 400
+    
+    user = User.query.filter_by(
+        project_id=project_id,
+        role=role,
+        name=name,
+        is_active=True
+    ).first()
+    
+    if user:
+        user.last_seen = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'message': 'Heartbeat received'}), 200
+    else:
+        return jsonify({'error': 'Active user not found'}), 404
 
 
 @api.route('/api/projects/<int:project_id>/user-notification', methods=['POST'])
@@ -966,16 +1051,24 @@ def create_pending_change(project_id):
                         created_changes.append(row_add)
                         has_structural_changes = True
                 
-                # Find modified rows (skip rows that were moved - position changes don't count as modifications)
+                # Find modified rows (check ALL rows including moved ones for content changes)
                 for new_row in new_rows:
                     row_id = new_row.get('id')
                     if row_id and row_id in current_row_ids:
-                        # Skip rows that were explicitly moved - they're handled by row_move operation
-                        if row_id in moved_rows:
+                        # For moved rows, we need to find them in ANY phase's current_rows
+                        # since they may have moved from a different phase
+                        current_row = current_rows.get(row_id)
+                        if not current_row and row_id in moved_rows:
+                            # Row was moved from another phase, find it there
+                            for other_phase_rows in current_rows_by_phase.values():
+                                if row_id in other_phase_rows:
+                                    current_row = other_phase_rows[row_id]
+                                    break
+                        
+                        if not current_row:
                             continue
                         
-                        current_row = current_rows[row_id]
-                        # Check if row was actually modified
+                        # Check if row was actually modified (content change, not just position)
                         if (current_row.role != new_row.get('role', current_row.role) or
                             current_row.time != new_row.get('time', current_row.time) or
                             current_row.duration != new_row.get('duration', current_row.duration) or
@@ -1205,6 +1298,14 @@ def create_pending_change(project_id):
                 })
                 manager_user.notification_timestamp = datetime.utcnow()
                 db.session.commit()
+                
+                # Emit Socket.IO event for instant notification
+                socketio = get_socketio()
+                if socketio:
+                    socketio.emit('pending_changes_notification', {
+                        'project_id': project_id,
+                        'manager_role': project.manager_role
+                    }, room=f'project_{project_id}')
         
         return jsonify({
             'submission_id': submission_id,
@@ -1227,6 +1328,9 @@ def get_pending_changes(project_id):
     query = PendingChange.query.filter_by(project_id=project_id)
     if status_filter != 'all':
         query = query.filter_by(status=status_filter)
+    
+    # Filter out table_data changes - they are internal metadata, not user-visible changes
+    query = query.filter(PendingChange.change_type != 'table_data')
     
     pending_changes = query.order_by(PendingChange.created_at.desc()).all()
     return jsonify([pc.to_dict() for pc in pending_changes]), 200
@@ -1289,13 +1393,25 @@ def accept_pending_change(project_id, change_id):
             
             row = Row.query.get(row_id)
             if row:
-                row.role = new_data.get('role', row.role)
-                row.time = new_data.get('time', row.time)
-                row.duration = new_data.get('duration', row.duration)
-                row.description = new_data.get('description', row.description)
-                row.script = new_data.get('script', row.script)
-                row.status = new_data.get('status', row.status)
-                row.updated_at = datetime.utcnow()
+                # Use raw SQL to preserve updated_at (avoid ON UPDATE CURRENT_TIMESTAMP trigger)
+                original_updated_at = row.updated_at
+                sql = """
+                    UPDATE `rows` 
+                    SET role = :role, time = :time, duration = :duration, 
+                        description = :description, script = :script, status = :status,
+                        updated_at = :updated_at
+                    WHERE id = :row_id
+                """
+                db.session.execute(db.text(sql), {
+                    'role': new_data.get('role', row.role),
+                    'time': new_data.get('time', row.time),
+                    'duration': new_data.get('duration', row.duration),
+                    'description': new_data.get('description', row.description),
+                    'script': new_data.get('script', row.script),
+                    'status': new_data.get('status', row.status),
+                    'updated_at': original_updated_at,
+                    'row_id': row_id
+                })
                 db.session.commit()
             
         elif change_type == 'row_delete':
@@ -1571,13 +1687,39 @@ def accept_pending_change(project_id, change_id):
                             current_rows = Row.query.filter_by(phase_id=phase.id).all()
                             current_rows_dict = {r.id: r for r in current_rows}
                             
-                            # Map table_data rows to current rows
-                            # For duplicates, the temporary ID was already updated in the duplicate handler
-                            # For moves, row IDs should already match
+                            # Map table_data rows to current rows and UPDATE with current DB values
+                            # This ensures we only use table_data for ORDER, not for content
+                            # (content changes require separate row_update approval)
+                            updated_rows = []
                             for row_data in phase_data.get('rows', []):
                                 row_id = row_data.get('id')
-                                # If row_id exists in current rows, keep it
-                                if row_id not in current_rows_dict:
+                                if row_id in current_rows_dict:
+                                    # Row exists in this phase - use current DB values
+                                    db_row = current_rows_dict[row_id]
+                                    updated_rows.append({
+                                        'id': db_row.id,
+                                        'role': db_row.role,
+                                        'time': db_row.time,
+                                        'duration': db_row.duration,
+                                        'description': db_row.description or '',
+                                        'script': db_row.script or '',
+                                        'status': db_row.status,
+                                        'script_result': db_row.script_result
+                                    })
+                                elif row_id in all_current_rows_dict:
+                                    # Row was moved from another phase - use current DB values
+                                    db_row = all_current_rows_dict[row_id]
+                                    updated_rows.append({
+                                        'id': db_row.id,
+                                        'role': db_row.role,
+                                        'time': db_row.time,
+                                        'duration': db_row.duration,
+                                        'description': db_row.description or '',
+                                        'script': db_row.script or '',
+                                        'status': db_row.status,
+                                        'script_result': db_row.script_result
+                                    })
+                                else:
                                     # Try to find matching row by data (for newly created rows)
                                     matched = False
                                     for current_row in current_rows:
@@ -1587,13 +1729,20 @@ def accept_pending_change(project_id, change_id):
                                             current_row.description == row_data.get('description', '') and
                                             current_row.script == row_data.get('script', '') and
                                             current_row.status == row_data.get('status', 'N/A')):
-                                            row_data['id'] = current_row.id
+                                            updated_rows.append({
+                                                'id': current_row.id,
+                                                'role': current_row.role,
+                                                'time': current_row.time,
+                                                'duration': current_row.duration,
+                                                'description': current_row.description or '',
+                                                'script': current_row.script or '',
+                                                'status': current_row.status,
+                                                'script_result': current_row.script_result
+                                            })
                                             matched = True
                                             break
-                                    # If no match found, this row might have been deleted - skip it
-                                    if not matched:
-                                        # Remove this row from table_data as it doesn't exist in DB
-                                        phase_data['rows'] = [r for r in phase_data.get('rows', []) if r.get('id') != row_id]
+                                    # If no match found, skip this row (doesn't exist in DB)
+                            phase_data['rows'] = updated_rows
                     
                     # Update the database with the correct row order from table_data
                     # This ensures getPhases returns rows in the correct order
@@ -1616,12 +1765,18 @@ def accept_pending_change(project_id, change_id):
                     
                     db.session.commit()
         
-        remaining_pending = PendingChange.query.filter_by(
-            project_id=project_id,
-            submission_id=submission_id,
-            status='pending'
+        # Count remaining pending changes (excluding table_data which is internal metadata)
+        remaining_pending = PendingChange.query.filter(
+            PendingChange.project_id == project_id,
+            PendingChange.submission_id == submission_id,
+            PendingChange.status == 'pending',
+            PendingChange.change_type != 'table_data'
         ).count()
         
+        # Emit real-time update to all clients
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('phases_updated', {'project_id': project_id}, room=f'project_{project_id}')
         
         return jsonify({
             'message': 'Change accepted',
@@ -1655,15 +1810,39 @@ def decline_pending_change(project_id, change_id):
         if reviewed_by:
             pending_change.reviewed_by = reviewed_by
             pending_change.reviewed_at = datetime.utcnow()
-            db.session.commit()
-    
-        # Check if all changes in this submission are processed
+        db.session.commit()
+        
         submission_id = pending_change.submission_id
-        remaining_pending = PendingChange.query.filter_by(
-            project_id=project_id,
-            submission_id=submission_id,
-            status='pending'
+        change_type = pending_change.change_type
+        
+        # If declining a structural change (row_move, row_duplicate), also decline table_data
+        # since table_data is only meaningful with structural changes
+        if change_type in ['row_move', 'row_duplicate']:
+            table_data_change = PendingChange.query.filter_by(
+                project_id=project_id,
+                submission_id=submission_id,
+                change_type='table_data',
+                status='pending'
+            ).first()
+            if table_data_change:
+                table_data_change.status = 'declined'
+                if reviewed_by:
+                    table_data_change.reviewed_by = reviewed_by
+                    table_data_change.reviewed_at = datetime.utcnow()
+                db.session.commit()
+    
+        # Check if all changes in this submission are processed (excluding table_data)
+        remaining_pending = PendingChange.query.filter(
+            PendingChange.project_id == project_id,
+            PendingChange.submission_id == submission_id,
+            PendingChange.status == 'pending',
+            PendingChange.change_type != 'table_data'
         ).count()
+        
+        # Emit real-time update to all clients
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('phases_updated', {'project_id': project_id}, room=f'project_{project_id}')
         
         return jsonify({
             'message': 'Change declined',

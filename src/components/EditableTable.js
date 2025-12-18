@@ -1055,30 +1055,6 @@ const EditableTable = ({
     }
   }, []); // No dependencies - uses functional state update
 
-  // Poll for notifications (for non-manager users)
-  useEffect(() => {
-    if (!isManager && projectId && userRole && userName) {
-      const interval = setInterval(() => {
-        api.getUserNotification(projectId, userRole, userName)
-          .then(response => {
-            if (response.command && response.timestamp) {
-              if (response.timestamp !== lastProcessedNotificationTimestamp) {
-                processNotification(response.command, response.data);
-                setLastProcessedNotificationTimestamp(response.timestamp);
-                // Clear the notification after processing
-                api.clearUserNotification(projectId, userRole, userName).catch(() => {});
-              }
-            }
-          })
-          .catch(err => {
-            // Silently fail - polling is not critical
-          });
-      }, 500);
-
-      return () => clearInterval(interval);
-    }
-  }, [isManager, projectId, userRole, userName, lastProcessedNotificationTimestamp, processNotification]);
-
   // Cleanup blink interval on unmount
   useEffect(() => {
     return () => {
