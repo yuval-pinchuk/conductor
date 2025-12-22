@@ -1983,10 +1983,89 @@ def get_action_logs_pdf(project_id):
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
         from io import BytesIO
+        import os
+        try:
+            from bidi.algorithm import get_display
+            HAS_BIDI = True
+        except ImportError:
+            HAS_BIDI = False
+            # Fallback: simple Hebrew detection and reversal
+            def get_display(text):
+                # Check if text contains Hebrew characters (U+0590 to U+05FF)
+                if any('\u0590' <= char <= '\u05FF' for char in text):
+                    # Reverse the string for RTL display
+                    return text[::-1]
+                return text
+        
+        # Helper function to process text for RTL display
+        def process_rtl_text(text):
+            """Process text for RTL display using bidi algorithm or simple reversal"""
+            if HAS_BIDI:
+                return get_display(text)
+            else:
+                return get_display(text)
+        
+        # Register Hebrew-supporting font (DejaVu Sans)
+        # Try to find DejaVu Sans font in common locations
+        font_paths = [
+            '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf',  # Linux
+            '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',  # macOS
+            'C:/Windows/Fonts/arial.ttf',  # Windows (Arial supports Hebrew)
+            'C:/Windows/Fonts/calibri.ttf',  # Windows (Calibri supports Hebrew)
+        ]
+        
+        hebrew_font_name = 'Helvetica'  # Fallback to Helvetica
+        hebrew_font_bold_name = 'Helvetica-Bold'
+        
+        # Try to register a Hebrew-supporting font
+        for font_path in font_paths:
+            if os.path.exists(font_path):
+                try:
+                    pdfmetrics.registerFont(TTFont('HebrewFont', font_path))
+                    pdfmetrics.registerFont(TTFont('HebrewFont-Bold', font_path))
+                    hebrew_font_name = 'HebrewFont'
+                    hebrew_font_bold_name = 'HebrewFont-Bold'
+                    break
+                except Exception:
+                    continue
+        
+        # If DejaVu Sans is not found, try to use system fonts that support Hebrew
+        # Arial and Calibri on Windows typically support Hebrew
+        if hebrew_font_name == 'Helvetica':
+            # Try Windows fonts
+            windows_fonts = [
+                ('C:/Windows/Fonts/arial.ttf', 'Arial'),
+                ('C:/Windows/Fonts/calibri.ttf', 'Calibri'),
+                ('C:/Windows/Fonts/tahoma.ttf', 'Tahoma'),
+            ]
+            for font_path, font_name in windows_fonts:
+                if os.path.exists(font_path):
+                    try:
+                        pdfmetrics.registerFont(TTFont('HebrewFont', font_path))
+                        pdfmetrics.registerFont(TTFont('HebrewFont-Bold', font_path))
+                        hebrew_font_name = 'HebrewFont'
+                        hebrew_font_bold_name = 'HebrewFont-Bold'
+                        break
+                    except Exception:
+                        continue
         
         # Get action logs for the project - only from current reset epoch
         logs = ActionLog.query.filter_by(project_id=project_id, reset_epoch=project.reset_epoch).order_by(ActionLog.timestamp.asc()).all()
+        
+        # Calculate row index mapping (row_id -> row_index)
+        # Load all phases and rows, order by phase_number and row ID to get consistent global row index
+        phases = Phase.query.filter_by(project_id=project_id).order_by(Phase.phase_number).all()
+        row_id_to_index = {}
+        global_row_index = 1
+        
+        for phase in phases:
+            rows = Row.query.filter_by(phase_id=phase.id).order_by(Row.id).all()
+            for row in rows:
+                row_id_to_index[row.id] = global_row_index
+                global_row_index += 1
         
         # Create PDF in memory
         buffer = BytesIO()
@@ -1995,7 +2074,7 @@ def get_action_logs_pdf(project_id):
         # Container for the 'Flowable' objects
         elements = []
         
-        # Define styles
+        # Define styles with Hebrew font support
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
             'CustomTitle',
@@ -2003,14 +2082,42 @@ def get_action_logs_pdf(project_id):
             fontSize=16,
             textColor=colors.HexColor('#000000'),
             spaceAfter=12,
-            alignment=1  # Center alignment
+            alignment=1,  # Center alignment
+            fontName=hebrew_font_bold_name
         )
         heading_style = ParagraphStyle(
             'CustomHeading',
             parent=styles['Heading2'],
             fontSize=12,
             textColor=colors.HexColor('#000000'),
-            spaceAfter=6
+            spaceAfter=6,
+            fontName=hebrew_font_name
+        )
+        
+        # Create a normal style with Hebrew font
+        normal_style = ParagraphStyle(
+            'CustomNormal',
+            parent=styles['Normal'],
+            fontName=hebrew_font_name
+        )
+        
+        # Create RTL paragraph styles for table cells
+        rtl_table_header_style = ParagraphStyle(
+            'RTLTableHeader',
+            parent=styles['Normal'],
+            fontName=hebrew_font_bold_name,
+            fontSize=10,
+            alignment=2,  # RIGHT alignment
+            textColor=colors.whitesmoke
+        )
+        
+        rtl_table_cell_style = ParagraphStyle(
+            'RTLTableCell',
+            parent=styles['Normal'],
+            fontName=hebrew_font_name,
+            fontSize=8,
+            alignment=2,  # RIGHT alignment
+            textColor=colors.black
         )
         
         # Title
@@ -2020,74 +2127,123 @@ def get_action_logs_pdf(project_id):
         
         # Project info
         info_text = f"Project: {project.name}<br/>Reset Epoch: {project.reset_epoch}<br/>Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>Total Actions: {len(logs)}"
-        info_para = Paragraph(info_text, styles['Normal'])
+        info_para = Paragraph(info_text, normal_style)
         elements.append(info_para)
         elements.append(Spacer(1, 0.2*inch))
         
         if not logs:
-            no_data = Paragraph("No action logs found for this project.", styles['Normal'])
+            no_data = Paragraph("No action logs found for this project.", normal_style)
             elements.append(no_data)
         else:
-            # Prepare table data
-            table_data = [['Timestamp', 'User', 'Role', 'Action', 'Details', 'Script Result']]
+            # Hebrew translation dictionaries
+            column_headers_he = {
+                'Timestamp': 'תאריך ושעה',
+                'User': 'משתמש',
+                'Role': 'תפקיד',
+                'Action': 'פעולה',
+                'Details': 'פרטים',
+                'Script Result': 'תוצאת סקריפט'
+            }
+            
+            action_type_map_he = {
+                'row_status_change': 'שינוי סטטוס שורה',
+                'script_execution': 'הרצת סקריפט',
+                'phase_activation': 'הפעלת שלב',
+                'reset_statuses': 'איפוס כל הסטטוסים'
+            }
+            
+            status_messages_he = {
+                'Success': 'הצלחה',
+                'Failed': 'כשלון',
+                'Activated': 'הופעל',
+                'Deactivated': 'בוטל',
+                'N/A': 'ללא סטטוס',
+                'Passed': 'עבר'
+            }
+            
+            details_text_he = {
+                'Row #': 'שורה #',
+                'Phase': 'שלב',
+                'Reset': 'איפוס',
+                'rows to N/A': 'שורות ל-ללא סטטוס'
+            }
+            
+            # Prepare table data - RTL order (rightmost column first)
+            # Original order: Timestamp, User, Role, Action, Details, Script Result
+            # RTL order: Script Result, Details, Action, Role, User, Timestamp
+            # Use Paragraph objects with RTL direction for proper Hebrew rendering
+            # Process Hebrew text through bidi algorithm for correct RTL display
+            table_data = [[
+                Paragraph(process_rtl_text(column_headers_he['Script Result']), rtl_table_header_style),
+                Paragraph(process_rtl_text(column_headers_he['Details']), rtl_table_header_style),
+                Paragraph(process_rtl_text(column_headers_he['Action']), rtl_table_header_style),
+                Paragraph(process_rtl_text(column_headers_he['Role']), rtl_table_header_style),
+                Paragraph(process_rtl_text(column_headers_he['User']), rtl_table_header_style),
+                Paragraph(process_rtl_text(column_headers_he['Timestamp']), rtl_table_header_style)
+            ]]
             
             for log in logs:
                 # Format timestamp
-                timestamp_str = log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else 'N/A'
+                timestamp_str = log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else status_messages_he['N/A']
                 
-                # Format action type
-                action_type_map = {
-                    'row_status_change': 'Row Status Change',
-                    'script_execution': 'Script Execution',
-                    'phase_activation': 'Phase Activation',
-                    'reset_statuses': 'Reset All Statuses'
-                }
-                action_display = action_type_map.get(log.action_type, log.action_type)
+                # Format action type in Hebrew
+                action_display = action_type_map_he.get(log.action_type, log.action_type)
                 
-                # Format details
-                details_str = 'N/A'
+                # Format details in Hebrew
+                details_str = status_messages_he['N/A']
                 if log.action_details:
                     try:
                         details = json.loads(log.action_details)
                         if log.action_type == 'row_status_change':
-                            details_str = f"Row #{log.row_id}: {details.get('old_status', 'N/A')} → {details.get('new_status', 'N/A')}"
+                            old_status = status_messages_he.get(details.get('old_status', 'N/A'), details.get('old_status', 'N/A'))
+                            new_status = status_messages_he.get(details.get('new_status', 'N/A'), details.get('new_status', 'N/A'))
+                            row_index = row_id_to_index.get(log.row_id, log.row_id)  # Use row index, fallback to row_id if not found
+                            details_str = f"{details_text_he['Row #']}{row_index}: {old_status} ← {new_status}"
                         elif log.action_type == 'script_execution':
-                            details_str = f"Row #{log.row_id}: {details.get('script_path', 'N/A')}"
+                            script_path = details.get('script_path', status_messages_he['N/A'])
+                            row_index = row_id_to_index.get(log.row_id, log.row_id)  # Use row index, fallback to row_id if not found
+                            details_str = f"{details_text_he['Row #']}{row_index}: {script_path}"
                         elif log.action_type == 'phase_activation':
-                            status = 'Activated' if details.get('is_active') else 'Deactivated'
-                            details_str = f"Phase {details.get('phase_number', 'N/A')}: {status}"
+                            status = status_messages_he['Activated'] if details.get('is_active') else status_messages_he['Deactivated']
+                            phase_num = details.get('phase_number', status_messages_he['N/A'])
+                            details_str = f"{details_text_he['Phase']} {phase_num}: {status}"
                         elif log.action_type == 'reset_statuses':
                             rows_count = details.get('rows_count', 0)
-                            details_str = f"Reset {rows_count} rows to N/A"
+                            details_str = f"{details_text_he['Reset']} {rows_count} {details_text_he['rows to N/A']}"
                     except:
                         details_str = log.action_details[:50]  # Truncate if not JSON
                 
-                # Format script result
-                script_result_str = 'N/A'
+                # Format script result in Hebrew
+                script_result_str = status_messages_he['N/A']
                 if log.script_result is not None:
-                    script_result_str = 'Success' if log.script_result else 'Failed'
+                    script_result_str = status_messages_he['Success'] if log.script_result else status_messages_he['Failed']
                 
+                # Append in RTL order: Script Result, Details, Action, Role, User, Timestamp
+                # Convert all cells to Paragraph objects with RTL direction for proper Hebrew rendering
+                # Process all text through bidi algorithm for correct RTL display
                 table_data.append([
-                    timestamp_str,
-                    log.user_name,
-                    log.user_role,
-                    action_display,
-                    details_str,
-                    script_result_str
+                    Paragraph(process_rtl_text(script_result_str), rtl_table_cell_style),
+                    Paragraph(process_rtl_text(details_str), rtl_table_cell_style),
+                    Paragraph(process_rtl_text(action_display), rtl_table_cell_style),
+                    Paragraph(process_rtl_text(log.user_role), rtl_table_cell_style),
+                    Paragraph(process_rtl_text(log.user_name), rtl_table_cell_style),
+                    Paragraph(process_rtl_text(timestamp_str), rtl_table_cell_style)
                 ])
             
-            # Create table
-            table = Table(table_data, colWidths=[1.5*inch, 1*inch, 1*inch, 1.2*inch, 2*inch, 1*inch])
+            # Create table with Hebrew font support - RTL column widths (reversed)
+            # Original widths: [1.5*inch, 1*inch, 1*inch, 1.2*inch, 2*inch, 1*inch]
+            # RTL widths: [1*inch, 2*inch, 1.2*inch, 1*inch, 1*inch, 1.5*inch]
+            table = Table(table_data, colWidths=[1*inch, 2*inch, 1.2*inch, 1*inch, 1*inch, 1.5*inch])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),  # RTL alignment
+                ('FONTNAME', (0, 0), (-1, 0), hebrew_font_bold_name),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTNAME', (0, 1), (-1, -1), hebrew_font_name),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
