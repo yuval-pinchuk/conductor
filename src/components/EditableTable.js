@@ -1,10 +1,10 @@
 // src/components/EditableTable.js
 
-import React, { useState, useRef, useEffect, useMemo, useCallback, memo, useDeferredValue } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback, memo, useDeferredValue, startTransition } from 'react';
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
   Paper, IconButton, TextField, Button,
-  Typography, Dialog, DialogTitle, DialogContent, DialogActions, Alert
+  Typography, Dialog, DialogTitle, DialogContent, DialogActions, Alert, CircularProgress
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -119,10 +119,15 @@ const TableRowComponent = memo(({
   handleMoveRow,
   isManager,
   rowRefs,
-  tableData
+  tableData,
+  editComponentsReady = Infinity,
+  globalRowIndex = 0
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  
+  // Determine if edit components should be rendered for this row
+  const shouldRenderEditComponents = !isEditing || globalRowIndex < editComponentsReady;
 
   const handleDragStart = (e) => {
     if (!isEditing) return;
@@ -201,10 +206,15 @@ const TableRowComponent = memo(({
         if (el) rowRefs.current[row.id] = el;
       }}
     >
-      {/* Drag Handle - Only in edit mode */}
-      {isEditing && (
+      {/* Drag Handle - Only in edit mode and when components are ready */}
+      {isEditing && globalRowIndex < editComponentsReady && (
         <TableCell style={{ width: '30px', padding: '4px', textAlign: 'center' }}>
           <DragIndicatorIcon style={{ color: '#666', cursor: 'grab' }} />
+        </TableCell>
+      )}
+      {isEditing && globalRowIndex >= editComponentsReady && (
+        <TableCell style={{ width: '30px', padding: '4px', textAlign: 'center' }}>
+          <CircularProgress size={12} style={{ color: '#888' }} />
         </TableCell>
       )}
       
@@ -214,7 +224,7 @@ const TableRowComponent = memo(({
       </TableCell>
       {/* Role */}
       <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-        {isEditing ? (
+        {isEditing && globalRowIndex < editComponentsReady ? (
           <select
             value={row.role}
             onChange={(e) => handleChange(phaseIndex, rowIndex, 'role', e.target.value)}
@@ -252,30 +262,36 @@ const TableRowComponent = memo(({
               <option key={role} value={role} style={{ backgroundColor: '#1e1e1e', color: '#ffffff' }}>{role}</option>
             ))}
           </select>
+        ) : isEditing ? (
+          <Typography style={{ color: '#888', fontSize: '0.9rem' }}>טוען...</Typography>
         ) : (
           row.role
         )}
       </TableCell>
       
       <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-        {isEditing ? (
+        {isEditing && globalRowIndex < editComponentsReady ? (
             <TimeInput 
             value={row.time}
             onChange={(val) => handleChange(phaseIndex, rowIndex, 'time', val)}
             format="hh:mm:ss" // Pass the expected format
             />
+        ) : isEditing ? (
+          <Typography style={{ color: '#888', fontSize: '0.9rem' }}>{row.time}</Typography>
         ) : (
             row.time
         )}
       </TableCell>
 
       <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-        {isEditing ? (
+        {isEditing && globalRowIndex < editComponentsReady ? (
             <TimeInput 
             value={row.duration}
             onChange={(val) => handleChange(phaseIndex, rowIndex, 'duration', val)}
             format="mm:ss" // Pass the expected format
             />
+        ) : isEditing ? (
+          <Typography style={{ color: '#888', fontSize: '0.9rem' }}>{row.duration}</Typography>
         ) : (
             row.duration
         )}
@@ -283,7 +299,7 @@ const TableRowComponent = memo(({
 
       {/* Description (Free Text, Expands Row) */}
       <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-        {isEditing ? (
+        {isEditing && globalRowIndex < editComponentsReady ? (
           <TextField
             value={row.description}
             onChange={(e) => handleChange(phaseIndex, rowIndex, 'description', e.target.value)}
@@ -292,6 +308,10 @@ const TableRowComponent = memo(({
             fullWidth
             sx={descriptionTextFieldStyles}
           />
+        ) : isEditing ? (
+          <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '0.9rem', color: '#888' }}>
+            {row.description || 'טוען...'}
+          </Typography>
         ) : (
           <Typography style={{ whiteSpace: 'pre-wrap', textAlign: 'right', fontSize: '1rem' }}>
             {row.description}
@@ -301,7 +321,7 @@ const TableRowComponent = memo(({
       
       {/* Script Column */}
       <TableCell style={{ textAlign: 'right', fontSize: '1rem' }}>
-        {isEditing ? (
+        {isEditing && globalRowIndex < editComponentsReady ? (
           <TextField
             value={row.script || ''}
             onChange={(e) => handleChange(phaseIndex, rowIndex, 'script', e.target.value)}
@@ -310,6 +330,10 @@ const TableRowComponent = memo(({
             fullWidth
             sx={scriptTextFieldStyles}
           />
+        ) : isEditing ? (
+          <Typography style={{ color: '#888', fontSize: '0.9rem' }}>
+            {row.script || 'טוען...'}
+          </Typography>
         ) : (
           row.script ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
@@ -432,7 +456,9 @@ const TableRowComponent = memo(({
       prevProps.isEditing !== nextProps.isEditing ||
       prevProps.canChangeStatus !== nextProps.canChangeStatus ||
       prevProps.isUserRoleMatch !== nextProps.isUserRoleMatch ||
-      prevProps.isManager !== nextProps.isManager) {
+      prevProps.isManager !== nextProps.isManager ||
+      prevProps.editComponentsReady !== nextProps.editComponentsReady ||
+      prevProps.globalRowIndex !== nextProps.globalRowIndex) {
     return false;
   }
   
@@ -495,6 +521,8 @@ const EditableTable = ({
   const [nextRowHeight, setNextRowHeight] = useState(60); // Default estimate for next row display
   const [tableHeaderHeight, setTableHeaderHeight] = useState(53); // Default estimate
   const [renderedRowCount, setRenderedRowCount] = useState(Infinity); // Progressive rendering - start with all rendered
+  const [styleCalculationChunk, setStyleCalculationChunk] = useState(0); // Track how many rows have styles calculated
+  const [editComponentsReady, setEditComponentsReady] = useState(0); // Track how many rows have edit components ready
   const rowRefs = useRef({});
   const tableContainerRef = useRef(null);
   const periodicScriptsRef = useRef(null);
@@ -510,54 +538,122 @@ const EditableTable = ({
   // Progressive rendering: render rows in batches when entering edit mode
   useEffect(() => {
     if (isEditing) {
-      // Render first batch immediately (increased from 50 to 150 for faster initial render)
-      const initialBatch = Math.min(150, totalRowCount);
-      setRenderedRowCount(initialBatch);
+      const renderStartTime = performance.now();
+      console.log('[Performance] EditableTable: Starting progressive render, total rows:', totalRowCount);
       
-      // Render remaining rows progressively in background using requestIdleCallback
-      if (totalRowCount > initialBatch) {
-        let currentCount = initialBatch;
-        const batchSize = 50; // Increased from 25 to 50 for faster completion
-        let cancelled = false;
-        let timeoutId = null;
-        let idleId = null;
-        
-        const renderNextBatch = () => {
-          if (cancelled || currentCount >= totalRowCount) return;
+      // Initial render: 150 rows for good balance between speed and content
+      const initialBatch = Math.min(150, totalRowCount);
+      const setInitialTime = performance.now();
+      setRenderedRowCount(initialBatch);
+      console.log(`[Performance] EditableTable: Set initial batch (${initialBatch} rows) in ${(performance.now() - setInitialTime).toFixed(2)}ms`);
+      
+        // Render remaining rows progressively in background with larger batches for faster completion
+        if (totalRowCount > initialBatch) {
+          let currentCount = initialBatch;
+          const batchSize = 150; // Larger batches for faster completion
+          let cancelled = false;
+          let timeoutId = null;
+          let batchCount = 0;
           
-          currentCount = Math.min(currentCount + batchSize, totalRowCount);
-          setRenderedRowCount(currentCount);
+          const renderNextBatch = () => {
+            if (cancelled || currentCount >= totalRowCount) {
+              const totalTime = performance.now() - renderStartTime;
+              console.log(`[Performance] EditableTable: Completed progressive render in ${totalTime.toFixed(2)}ms (${batchCount} batches)`);
+              return;
+            }
+            
+            const batchStartTime = performance.now();
+            batchCount++;
+            currentCount = Math.min(currentCount + batchSize, totalRowCount);
+            setRenderedRowCount(currentCount);
+            const batchTime = performance.now() - batchStartTime;
+            console.log(`[Performance] EditableTable: Batch ${batchCount} (${currentCount}/${totalRowCount} rows) in ${batchTime.toFixed(2)}ms`);
+            
+            if (currentCount < totalRowCount && !cancelled) {
+              // Use setTimeout with 0ms for more predictable and faster execution
+              timeoutId = setTimeout(renderNextBatch, 0);
+            } else {
+              const totalTime = performance.now() - renderStartTime;
+              console.log(`[Performance] EditableTable: Completed progressive render in ${totalTime.toFixed(2)}ms (${batchCount} batches)`);
+            }
+          };
           
-          if (currentCount < totalRowCount && !cancelled) {
-            // Use requestIdleCallback for next batch, fallback to setTimeout
-            const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 8));
-            idleId = scheduler(renderNextBatch);
-          }
-        };
+          // Start progressive rendering immediately after initial batch
+          timeoutId = setTimeout(renderNextBatch, 0);
         
-        // Start progressive rendering immediately after initial batch
-        const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
-        idleId = scheduler(renderNextBatch);
-        
-        // Cleanup function to cancel progressive rendering
-        return () => {
-          cancelled = true;
-          if (timeoutId) clearTimeout(timeoutId);
-          if (idleId && window.cancelIdleCallback) {
-            window.cancelIdleCallback(idleId);
-          } else if (idleId) {
-            // Fallback: if setTimeout was used, we can't cancel it, but cancelled flag prevents execution
-            clearTimeout(idleId);
-          }
-        };
+          // Cleanup function to cancel progressive rendering
+          return () => {
+            cancelled = true;
+            if (timeoutId) clearTimeout(timeoutId);
+          };
       } else {
+        const totalTime = performance.now() - renderStartTime;
+        console.log(`[Performance] EditableTable: All rows rendered immediately in ${totalTime.toFixed(2)}ms`);
         setRenderedRowCount(totalRowCount);
       }
     } else {
       // Reset to render all when not editing (for display mode - no edit components)
       setRenderedRowCount(Infinity);
+      setEditComponentsReady(0);
     }
   }, [isEditing, totalRowCount]);
+
+  // Defer edit component creation to avoid blocking initial render
+  useEffect(() => {
+    if (!isEditing || renderedRowCount === 0 || renderedRowCount === Infinity) {
+      setEditComponentsReady(0);
+      return;
+    }
+    
+    const componentStartTime = performance.now();
+    console.log('[Performance] EditableTable: Starting deferred component creation for', renderedRowCount, 'rows');
+    
+    // Start with first 75 rows immediately for faster initial component creation
+    const initialComponents = Math.min(75, renderedRowCount);
+    setEditComponentsReady(initialComponents);
+    
+    if (renderedRowCount <= initialComponents) {
+      const componentTime = performance.now() - componentStartTime;
+      console.log(`[Performance] EditableTable: All components created immediately in ${componentTime.toFixed(2)}ms`);
+      return;
+    }
+    
+    // Create remaining components in larger batches for faster completion
+    let currentReady = initialComponents;
+    const componentBatchSize = 50; // Create components for 50 rows at a time
+    let cancelled = false;
+    let timeoutId = null;
+    
+    const createNextBatch = () => {
+      if (cancelled || currentReady >= renderedRowCount) {
+        const componentTime = performance.now() - componentStartTime;
+        console.log(`[Performance] EditableTable: Completed component creation in ${componentTime.toFixed(2)}ms`);
+        return;
+      }
+      
+      const batchStartTime = performance.now();
+      currentReady = Math.min(currentReady + componentBatchSize, renderedRowCount);
+      setEditComponentsReady(currentReady);
+      const batchTime = performance.now() - batchStartTime;
+      console.log(`[Performance] EditableTable: Component batch (${currentReady}/${renderedRowCount} rows ready) in ${batchTime.toFixed(2)}ms`);
+      
+      if (currentReady < renderedRowCount && !cancelled) {
+        // Use setTimeout with 0ms for more predictable and faster execution
+        timeoutId = setTimeout(createNextBatch, 0);
+      } else {
+        const componentTime = performance.now() - componentStartTime;
+        console.log(`[Performance] EditableTable: Completed component creation in ${componentTime.toFixed(2)}ms`);
+      }
+    };
+    
+    // Start creating next batch after initial components
+    timeoutId = setTimeout(createNextBatch, 0);
+    
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [isEditing, renderedRowCount]);
 
   // Clean up rowRefs when rows are removed to prevent memory leaks
   useEffect(() => {
@@ -606,28 +702,46 @@ const EditableTable = ({
   const deferredActivePhases = useDeferredValue(activePhases);
   const deferredCurrentClockSeconds = useDeferredValue(currentClockSeconds);
 
-  // Pre-calculate parsed time values for all rows (memoized)
-  // Use deferredTableData to keep in sync with rowStylesMap
+  // Pre-calculate parsed time values for rows (memoized)
+  // When in edit mode, only calculate for rendered rows to improve performance
   const parsedTimeMap = useMemo(() => {
     const map = new Map();
+    let globalRowIndex = 0;
     deferredTableData.forEach((phase, phaseIndex) => {
       phase.rows.forEach((row, rowIndex) => {
+        // In edit mode, only calculate for rendered rows
+        if (isEditing && globalRowIndex >= renderedRowCount) {
+          globalRowIndex++;
+          return;
+        }
         const key = `${phaseIndex}-${rowIndex}`;
         map.set(key, parseTimeToSeconds(row.time));
+        globalRowIndex++;
       });
     });
     return map;
-  }, [deferredTableData, parseTimeToSeconds]);
+  }, [deferredTableData, parseTimeToSeconds, isEditing, renderedRowCount]);
 
-  // Pre-calculate row styles for all rows (memoized)
-  // Uses deferred values to allow React to prioritize rendering over style calculations
+  // Pre-calculate row styles for rows (memoized)
+  // When in edit mode, only calculate for rendered rows to improve performance
+  // Uses deferred values and chunking to allow React to prioritize rendering over style calculations
   const rowStylesMap = useMemo(() => {
+    const calcStartTime = performance.now();
     const stylesMap = new Map();
+    let globalRowIndex = 0;
+    // In edit mode, limit initial calculation to first 15 rows for faster initial render (aggressive)
+    const maxCalculateRows = isEditing ? Math.min(renderedRowCount, Math.max(15, styleCalculationChunk)) : Infinity;
     
     deferredTableData.forEach((phase, phaseIndex) => {
       const isPhaseActive = !!deferredActivePhases[phase.phase];
       
       phase.rows.forEach((row, rowIndex) => {
+        // In edit mode, only calculate for limited rows initially
+        if (isEditing && globalRowIndex >= maxCalculateRows) {
+          globalRowIndex++;
+          return;
+        }
+        
         const key = `${phaseIndex}-${rowIndex}`;
         const rowTimeSeconds = parsedTimeMap.get(key);
         const isUserRoleMatch = row.role === userRole;
@@ -685,11 +799,61 @@ const EditableTable = ({
         }
         
         stylesMap.set(key, styles);
+        globalRowIndex++;
       });
     });
     
+    const calcTime = performance.now() - calcStartTime;
+    if (calcTime > 10) {
+      console.log(`[Performance] EditableTable: rowStylesMap calculation took ${calcTime.toFixed(2)}ms for ${maxCalculateRows} rows`);
+    }
     return stylesMap;
-  }, [deferredTableData, userRole, isManager, isClockRunning, deferredCurrentClockSeconds, deferredActivePhases, parsedTimeMap]);
+  }, [deferredTableData, userRole, isManager, isClockRunning, deferredCurrentClockSeconds, deferredActivePhases, parsedTimeMap, isEditing, renderedRowCount, styleCalculationChunk]);
+
+  // Progressively calculate styles for remaining rows when entering edit mode
+  useEffect(() => {
+    if (!isEditing || renderedRowCount === Infinity) {
+      setStyleCalculationChunk(0);
+      return;
+    }
+    
+    // Start with initial chunk (15 rows for aggressive optimization)
+    const initialChunk = 15;
+    if (renderedRowCount <= initialChunk) {
+      setStyleCalculationChunk(renderedRowCount);
+      return;
+    }
+    
+    // Set initial chunk
+    setStyleCalculationChunk(initialChunk);
+    
+    // Calculate remaining styles in chunks using startTransition
+    let currentChunk = initialChunk;
+    const chunkSize = 25;
+    let cancelled = false;
+    
+    const calculateNextChunk = () => {
+      if (cancelled || currentChunk >= renderedRowCount) return;
+      
+      startTransition(() => {
+        currentChunk = Math.min(currentChunk + chunkSize, renderedRowCount);
+        setStyleCalculationChunk(currentChunk);
+        
+        if (currentChunk < renderedRowCount && !cancelled) {
+          const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+          scheduler(calculateNextChunk);
+        }
+      });
+    };
+    
+    // Start calculating remaining chunks
+    const scheduler = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+    scheduler(calculateNextChunk);
+    
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditing, renderedRowCount]);
 
   // Calculate total rows before current phase for continuous numbering (memoized helper)
   const getGlobalRowNumber = useCallback((phaseIndex, rowIndex) => {
@@ -1528,11 +1692,15 @@ const EditableTable = ({
                 
                 // Skip rendering if beyond progressive render count (only in edit mode)
                 if (isEditing && globalRowIndex >= renderedRowCount) {
-                  // Render placeholder row to maintain layout
+                  // Render placeholder row to maintain layout with better loading indicator
+                  const remainingRows = totalRowCount - renderedRowCount;
                   return (
                     <TableRow key={`placeholder-${row.id}`} style={{ height: 53 }}>
-                      <TableCell colSpan={8} style={{ textAlign: 'center', color: '#666', fontSize: '0.9rem' }}>
-                        טוען...
+                      <TableCell colSpan={isEditing ? 9 : 7} style={{ textAlign: 'center', color: '#888', fontSize: '0.9rem', padding: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                          <CircularProgress size={16} style={{ color: '#888' }} />
+                          <span>טוען שורות... ({remainingRows} נותרו)</span>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -1572,6 +1740,8 @@ const EditableTable = ({
                     isManager={isManager}
                     rowRefs={rowRefs}
                     tableData={tableData}
+                    editComponentsReady={editComponentsReady}
+                    globalRowIndex={globalRowIndex}
                   />
                 );
               })}

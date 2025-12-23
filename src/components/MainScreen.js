@@ -433,6 +433,13 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         socket.emit('join_user_room', { project_id: project.id, role, name });
       }
     });
+    
+    socket.on('reconnect', () => {
+      socket.emit('join_project_room', { project_id: project.id });
+      if (project.id && role && name) {
+        socket.emit('join_user_room', { project_id: project.id, role, name });
+      }
+    });
 
     socket.on('phases_updated', (data) => {
       if (data.project_id === project.id && !isEditing) {
@@ -699,7 +706,18 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         isEditing={deferredIsEditing}
         currentVersion={currentVersion}
         setCurrentVersion={setCurrentVersion}
-        onToggleEdit={() => startTransition(() => setIsEditing(true))}
+        onToggleEdit={() => {
+          const startTime = performance.now();
+          console.log('[Performance] Starting edit mode switch');
+          startTransition(() => {
+            setIsEditing(true);
+            // Log after state update
+            setTimeout(() => {
+              const endTime = performance.now();
+              console.log(`[Performance] Edit mode switch took ${(endTime - startTime).toFixed(2)}ms`);
+            }, 0);
+          });
+        }}
         onSave={handleSave}
         onCancel={handleCancel}
         clockTime={clockTime}
