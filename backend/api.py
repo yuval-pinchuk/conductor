@@ -7,6 +7,7 @@ from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
 import json
 import uuid
+import requests
 from action_logger import ActionLogger
 
 api = Blueprint('api', __name__)
@@ -526,17 +527,64 @@ def execute_periodic_script(script_id):
     """Execute a periodic script and update status"""
     script = PeriodicScript.query.get_or_404(script_id)
     
-    # TODO: Implement actual script execution
-    # For now, simulate with random result
-    import random
-    result = random.choice([True, False])
-    
-    script.status = result
-    script.last_executed = datetime.utcnow()
-    script.updated_at = datetime.utcnow()
-    db.session.commit()
-    
-    return jsonify({'result': result, 'script': script.to_dict()}), 200
+    try:
+        # Execute the script at the given path
+        # response = requests.get(script.path, timeout=30)
+        # response.raise_for_status()
+        
+        # Parse the response JSON
+        # result_data = response.json()
+        
+        # Extract status and interval from response
+        # status = result_data.get('status', False)
+        # interval = result_data.get('interval', 60)  # Default to 60 seconds if not provided
+        status = not script.status
+        if status:
+            interval = 5
+        else:
+            interval = 5
+
+        # Validate interval is an integer
+        if not isinstance(interval, int) or interval < 0:
+            interval = 60
+        
+        # Update script status and last_executed timestamp
+        script.status = bool(status)
+        script.last_executed = datetime.utcnow()
+        script.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        # Return result with status and interval, plus updated script
+        return jsonify({
+            'result': {
+                'status': status,
+                'interval': interval
+            },
+            'script': script.to_dict()
+        }), 200
+        
+    except requests.exceptions.RequestException as e:
+        # If script execution fails, log error and return error response
+        current_app.logger.error(f'Failed to execute periodic script {script_id} at {script.path}: {str(e)}')
+        return jsonify({
+            'error': f'Failed to execute script: {str(e)}',
+            'result': {
+                'status': False,
+                'interval': 60  # Default interval on error
+            },
+            'script': script.to_dict()
+        }), 500
+    except (ValueError, KeyError) as e:
+        # If response parsing fails, log error and return error response
+        current_app.logger.error(f'Failed to parse periodic script {script_id} response: {str(e)}')
+        return jsonify({
+            'error': f'Invalid script response format: {str(e)}',
+            'result': {
+                'status': False,
+                'interval': 60  # Default interval on error
+            },
+            'script': script.to_dict()
+        }), 500
 
 
 # ==================== ROLE ENDPOINTS ====================

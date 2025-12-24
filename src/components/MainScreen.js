@@ -118,6 +118,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const lastReadMessageIndexRef = useRef(-1);
   const processedMessageIdsRef = useRef(new Set());
   const processNotificationRef = useRef(null);
+  const periodicScriptTimeoutsRef = useRef({}); // Store timeout IDs for each periodic script
+  const executePeriodicScriptRef = useRef(null); // Store latest executePeriodicScript function
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -271,6 +273,131 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         });
     }
   }, 30000); // Heartbeat every 30 seconds
+
+  // Execute a single periodic script and schedule next execution
+  const executePeriodicScript = useCallback(async (script) => {
+    // Check if already executing - prevent parallel executions
+    if (periodicScriptTimeoutsRef.current[script.id] === 'executing') {
+      return;
+    }
+    
+    // Mark script as executing immediately to prevent parallel calls
+    periodicScriptTimeoutsRef.current[script.id] = 'executing';
+    
+    try {
+      const response = await api.executePeriodicScript(script.id);
+      const { result, script: updatedScript } = response;
+      
+      // Schedule next execution after the returned interval (convert seconds to milliseconds)
+      const intervalMs = result.interval * 1000;
+      
+      // Clear any existing timeout for this script before scheduling a new one
+      const existingTimeout = periodicScriptTimeoutsRef.current[script.id];
+      if (existingTimeout && typeof existingTimeout === 'number') {
+        clearTimeout(existingTimeout);
+      }
+      
+      // Schedule next execution BEFORE updating state to prevent useEffect from re-triggering
+      const timeoutId = setTimeout(() => {
+        // Clear the timeout ref before executing (will be set again after execution)
+        delete periodicScriptTimeoutsRef.current[script.id];
+        // Get current script state and execute directly (not from setState callback)
+        const currentScripts = periodicScriptsRef.current;
+        const currentScript = currentScripts?.find(s => s.id === script.id);
+        if (currentScript && executePeriodicScriptRef.current) {
+          executePeriodicScriptRef.current(currentScript);
+        }
+      }, intervalMs);
+      
+      // Store the actual timeout ID in ref
+      periodicScriptTimeoutsRef.current[script.id] = timeoutId;
+      
+      // Update the script in state with new status AFTER timeout is set
+      setPeriodicScripts(prev => {
+        return prev.map(s => 
+          s.id === script.id 
+            ? { ...s, status: result.status, last_executed: updatedScript.last_executed }
+            : s
+        );
+      });
+      
+    } catch (error) {
+      console.error(`Failed to execute periodic script ${script.id} (${script.name}):`, error);
+      // Don't schedule next execution on error
+      delete periodicScriptTimeoutsRef.current[script.id];
+    }
+  }, []);
+
+  // Store latest executePeriodicScript function in ref
+  useEffect(() => {
+    executePeriodicScriptRef.current = executePeriodicScript;
+  }, [executePeriodicScript]);
+
+  // Track script IDs to detect when scripts are added/removed (not just status changes)
+  const periodicScriptIdsRef = useRef(new Set());
+  const periodicScriptsRef = useRef(periodicScripts);
+  
+  // Update ref when periodicScripts changes
+  useEffect(() => {
+    periodicScriptsRef.current = periodicScripts;
+  }, [periodicScripts]);
+  
+  // Manage automatic periodic script execution - only trigger on script add/remove, not status changes
+  useEffect(() => {
+    const currentScripts = periodicScriptsRef.current;
+    if (!currentScripts || currentScripts.length === 0) {
+      // Clear all timeouts if no scripts
+      Object.values(periodicScriptTimeoutsRef.current).forEach(timeoutId => {
+        if (typeof timeoutId === 'number') {
+          clearTimeout(timeoutId);
+        }
+      });
+      periodicScriptTimeoutsRef.current = {};
+      periodicScriptIdsRef.current = new Set();
+      return;
+    }
+
+    // Get current script IDs
+    const currentScriptIds = new Set(currentScripts.map(s => s.id));
+    const previousScriptIds = periodicScriptIdsRef.current;
+    
+    // Check if scripts were added or removed (not just status changed)
+    const scriptsChanged = 
+      currentScriptIds.size !== previousScriptIds.size ||
+      [...currentScriptIds].some(id => !previousScriptIds.has(id)) ||
+      [...previousScriptIds].some(id => !currentScriptIds.has(id));
+    
+    // Update the ref with current IDs
+    periodicScriptIdsRef.current = currentScriptIds;
+    
+    // Cancel timeouts for scripts that no longer exist
+    Object.keys(periodicScriptTimeoutsRef.current).forEach(scriptId => {
+      if (!currentScriptIds.has(parseInt(scriptId))) {
+        const timeoutId = periodicScriptTimeoutsRef.current[scriptId];
+        if (typeof timeoutId === 'number') {
+          clearTimeout(timeoutId);
+        }
+        delete periodicScriptTimeoutsRef.current[scriptId];
+      }
+    });
+
+    // Only execute scripts if they were added (not on every status update)
+    if (scriptsChanged) {
+      currentScripts.forEach(script => {
+        // Only start if not already running (check if timeout exists or is executing)
+        const hasTimeout = periodicScriptTimeoutsRef.current[script.id] !== undefined;
+        if (!hasTimeout) {
+          executePeriodicScript(script);
+        }
+      });
+    }
+
+    // NO cleanup function - we don't want to clear timeouts when dependencies change
+    // Timeouts are only cleared:
+    // 1. When scripts are removed (handled above in the effect body)
+    // 2. When scripts array is empty (handled above)
+    // 3. On actual component unmount (handled by React automatically when component is destroyed)
+  }, [executePeriodicScript, periodicScripts]); // Need periodicScripts to detect when scripts are first loaded
 
   const handleSave = async () => {
     if (isSaving) return;

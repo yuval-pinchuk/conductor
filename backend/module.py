@@ -153,7 +153,8 @@ class PeriodicScript(db.Model):
             'id': self.id,
             'name': self.name,
             'path': self.path,
-            'status': self.status
+            'status': self.status,
+            'last_executed': self.last_executed.isoformat() if self.last_executed else None
         }
 
 
