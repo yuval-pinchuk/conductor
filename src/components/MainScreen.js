@@ -1,13 +1,16 @@
 // src/components/MainScreen.js
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, startTransition, useDeferredValue } from 'react';
 import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
 import ProjectChat from './ProjectChat';
+import usePageVisibility from '../hooks/usePageVisibility';
 import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '../api/conductorApi';
+import { io } from 'socket.io-client';
+import { API_BASE_URL } from '../config';
 
 const useInterval = (callback, delay) => {
   const savedCallback = React.useRef();
@@ -35,8 +38,18 @@ const formatTime = (totalSeconds) => {
   return (isNegative ? '-' : '+') + hours + ':' + minutes + ':' + seconds;
 };
 
+// Helper function for efficient deep copying of table data
+// Uses manual copy instead of structuredClone for better compatibility
+const deepCloneTableData = (data) => {
+  return data.map(phase => ({
+    ...phase,
+    rows: phase.rows.map(row => ({ ...row }))
+  }));
+};
+
 const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === project.manager_role;
+  const isVisible = usePageVisibility();
   const [projectDetails, setProjectDetails] = useState(project);
   
   // State for the project version
@@ -45,6 +58,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [originalVersion, setOriginalVersion] = useState(project.version);
   
   const [isEditing, setIsEditing] = useState(false);
+  // Defer the isEditing value to allow React to keep UI responsive during transition
+  const deferredIsEditing = useDeferredValue(isEditing);
   const [originalTableData, setOriginalTableData] = useState([]);
   const [currentTableData, setCurrentTableData] = useState([]);
   const [allRoles, setAllRoles] = useState([]);
@@ -62,6 +77,13 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Pending Changes State
   const [pendingChanges, setPendingChanges] = useState([]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [inactiveUserDialogOpen, setInactiveUserDialogOpen] = useState(false);
+  
+  // Track explicit move/duplicate operations to prevent index change notifications
+  const explicitOperationsRef = useRef({ row_moves: [], row_duplicates: [] });
+  
+  // Track if we just accepted a change with table_data to prevent reload
+  const justAcceptedWithTableDataRef = useRef(false);
 
   // Loading states
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -95,6 +117,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const lastReadMessageIndexRef = useRef(-1);
   const processedMessageIdsRef = useRef(new Set());
+  const processNotificationRef = useRef(null);
+  const periodicScriptTimeoutsRef = useRef({}); // Store timeout IDs for each periodic script
+  const executePeriodicScriptRef = useRef(null); // Store latest executePeriodicScript function
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -113,7 +138,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
   const handleRowStatusChange = async (rowId, status) => {
     try {
-      await api.updateRow(rowId, { status });
+      await api.updateRow(rowId, { status, user_name: name, user_role: role });
       await loadProjectData(false);
     } catch (error) {
       console.error('Failed to update row status', error);
@@ -125,7 +150,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
   const handleRunRowScript = async (rowId) => {
     try {
-      const { result } = await api.runRowScript(rowId);
+      const { result } = await api.runRowScript(rowId, { user_name: name, user_role: role });
       applyRowUpdates(rowId, { scriptResult: result });
     } catch (error) {
       console.error('Failed to run script', error);
@@ -137,7 +162,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const handleTogglePhaseActivation = async (phase) => {
     if (!isManager) return;
     try {
-      const updatedPhase = await api.togglePhaseActive(phase.id);
+      const updatedPhase = await api.togglePhaseActive(phase.id, { user_name: name, user_role: role });
       setActivePhases(prev => ({
         ...prev,
         [updatedPhase.phase]: !!updatedPhase.is_active
@@ -186,7 +211,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       }));
       
       setCurrentTableData(tableData);
-      setOriginalTableData(JSON.parse(JSON.stringify(tableData)));
+      // Use efficient manual copy instead of structuredClone (faster and more compatible)
+      setOriginalTableData(deepCloneTableData(tableData));
       
       // Set active phases
       const activePhasesMap = {};
@@ -196,8 +222,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       setActivePhases(activePhasesMap);
       
       // Fetch roles
-      const rolesData = await api.getProjectRoles(project.id);
-      const roles = rolesData.map(r => r.role_name);
+      const roles = await api.getProjectRoles(project.id);
       setAllRoles(roles);
       
       // Fetch periodic scripts
@@ -224,15 +249,155 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     loadProjectData();
   }, [loadProjectData]);
 
-  // Poll for project data updates (when not editing)
-  // This ensures users see changes made by managers or other users
+  // Poll for project data updates as fallback (Socket.IO handles real-time updates)
+  // This ensures data syncs even if Socket.IO connection drops
   useInterval(() => {
-    if (!isEditing && !isLoadingData) {
+    if (isVisible && !isEditing && !isLoadingData && !justAcceptedWithTableDataRef.current) {
+      // Don't reload if we just accepted a change with table_data (to preserve order)
       loadProjectData(false).catch(err => {
           // Silently fail - polling is not critical
         });
     }
-  }, 5000); // Poll every 5 seconds
+  }, 60000); // Poll every 60 seconds as fallback - Socket.IO handles real-time
+
+  // Send heartbeat every 30 seconds to keep session alive and allow stale session cleanup
+  useInterval(() => {
+    if (isVisible && project.id && name && role && !inactiveUserDialogOpen) {
+      api.heartbeat(project.id, name, role)
+        .catch((error) => {
+          // If heartbeat fails with 404, user is inactive
+          if (error.status === 404 || error.message?.includes('Active user not found')) {
+            setInactiveUserDialogOpen(true);
+          }
+          // Silently fail for other errors
+        });
+    }
+  }, 30000); // Heartbeat every 30 seconds
+
+  // Execute a single periodic script and schedule next execution
+  const executePeriodicScript = useCallback(async (script) => {
+    // Check if already executing - prevent parallel executions
+    if (periodicScriptTimeoutsRef.current[script.id] === 'executing') {
+      return;
+    }
+    
+    // Mark script as executing immediately to prevent parallel calls
+    periodicScriptTimeoutsRef.current[script.id] = 'executing';
+    
+    try {
+      const response = await api.executePeriodicScript(script.id);
+      const { result, script: updatedScript } = response;
+      
+      // Schedule next execution after the returned interval (convert seconds to milliseconds)
+      const intervalMs = result.interval * 1000;
+      
+      // Clear any existing timeout for this script before scheduling a new one
+      const existingTimeout = periodicScriptTimeoutsRef.current[script.id];
+      if (existingTimeout && typeof existingTimeout === 'number') {
+        clearTimeout(existingTimeout);
+      }
+      
+      // Schedule next execution BEFORE updating state to prevent useEffect from re-triggering
+      const timeoutId = setTimeout(() => {
+        // Clear the timeout ref before executing (will be set again after execution)
+        delete periodicScriptTimeoutsRef.current[script.id];
+        // Get current script state and execute directly (not from setState callback)
+        const currentScripts = periodicScriptsRef.current;
+        const currentScript = currentScripts?.find(s => s.id === script.id);
+        if (currentScript && executePeriodicScriptRef.current) {
+          executePeriodicScriptRef.current(currentScript);
+        }
+      }, intervalMs);
+      
+      // Store the actual timeout ID in ref
+      periodicScriptTimeoutsRef.current[script.id] = timeoutId;
+      
+      // Update the script in state with new status AFTER timeout is set
+      setPeriodicScripts(prev => {
+        return prev.map(s => 
+          s.id === script.id 
+            ? { ...s, status: result.status, last_executed: updatedScript.last_executed }
+            : s
+        );
+      });
+      
+    } catch (error) {
+      console.error(`Failed to execute periodic script ${script.id} (${script.name}):`, error);
+      // Don't schedule next execution on error
+      delete periodicScriptTimeoutsRef.current[script.id];
+    }
+  }, []);
+
+  // Store latest executePeriodicScript function in ref
+  useEffect(() => {
+    executePeriodicScriptRef.current = executePeriodicScript;
+  }, [executePeriodicScript]);
+
+  // Track script IDs to detect when scripts are added/removed (not just status changes)
+  const periodicScriptIdsRef = useRef(new Set());
+  const periodicScriptsRef = useRef(periodicScripts);
+  
+  // Update ref when periodicScripts changes
+  useEffect(() => {
+    periodicScriptsRef.current = periodicScripts;
+  }, [periodicScripts]);
+  
+  // Manage automatic periodic script execution - only trigger on script add/remove, not status changes
+  useEffect(() => {
+    const currentScripts = periodicScriptsRef.current;
+    if (!currentScripts || currentScripts.length === 0) {
+      // Clear all timeouts if no scripts
+      Object.values(periodicScriptTimeoutsRef.current).forEach(timeoutId => {
+        if (typeof timeoutId === 'number') {
+          clearTimeout(timeoutId);
+        }
+      });
+      periodicScriptTimeoutsRef.current = {};
+      periodicScriptIdsRef.current = new Set();
+      return;
+    }
+
+    // Get current script IDs
+    const currentScriptIds = new Set(currentScripts.map(s => s.id));
+    const previousScriptIds = periodicScriptIdsRef.current;
+    
+    // Check if scripts were added or removed (not just status changed)
+    const scriptsChanged = 
+      currentScriptIds.size !== previousScriptIds.size ||
+      [...currentScriptIds].some(id => !previousScriptIds.has(id)) ||
+      [...previousScriptIds].some(id => !currentScriptIds.has(id));
+    
+    // Update the ref with current IDs
+    periodicScriptIdsRef.current = currentScriptIds;
+    
+    // Cancel timeouts for scripts that no longer exist
+    Object.keys(periodicScriptTimeoutsRef.current).forEach(scriptId => {
+      if (!currentScriptIds.has(parseInt(scriptId))) {
+        const timeoutId = periodicScriptTimeoutsRef.current[scriptId];
+        if (typeof timeoutId === 'number') {
+          clearTimeout(timeoutId);
+        }
+        delete periodicScriptTimeoutsRef.current[scriptId];
+      }
+    });
+
+    // Only execute scripts if they were added (not on every status update)
+    if (scriptsChanged) {
+      currentScripts.forEach(script => {
+        // Only start if not already running (check if timeout exists or is executing)
+        const hasTimeout = periodicScriptTimeoutsRef.current[script.id] !== undefined;
+        if (!hasTimeout) {
+          executePeriodicScript(script);
+        }
+      });
+    }
+
+    // NO cleanup function - we don't want to clear timeouts when dependencies change
+    // Timeouts are only cleared:
+    // 1. When scripts are removed (handled above in the effect body)
+    // 2. When scripts array is empty (handled above)
+    // 3. On actual component unmount (handled by React automatically when component is destroyed)
+  }, [executePeriodicScript, periodicScripts]); // Need periodicScripts to detect when scripts are first loaded
 
   const handleSave = async () => {
     if (isSaving) return;
@@ -249,7 +414,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         
         // Update roles
         const currentRoles = await api.getProjectRoles(project.id);
-        const currentRoleNames = new Set(currentRoles.map(r => r.role_name));
+        const currentRoleNames = new Set(currentRoles);
         
         // Add new roles
         for (const roleName of allRoles) {
@@ -280,8 +445,14 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           version: currentVersion,
           table_data: currentTableData,
           periodic_scripts: periodicScripts,
+          // Include explicit move/duplicate operations to prevent index change notifications
+          explicit_operations: {
+            row_moves: explicitOperationsRef.current.row_moves,
+            row_duplicates: explicitOperationsRef.current.row_duplicates
+          }
           // roles: allRoles, // Removed - roles are derived from rows, not independently managed
         };
+        
         
         await api.createPendingChange(
           project.id,
@@ -289,6 +460,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           role,
           changesData
         );
+        
+        // Clear explicit operations after submission
+        explicitOperationsRef.current = { row_moves: [], row_duplicates: [] };
         
         // Revert to original data after submission
         setCurrentTableData(originalTableData);
@@ -327,9 +501,35 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     // 2. Revert to the deep clone saved at the start of the session
     setCurrentTableData(originalTableData); 
     setPeriodicScripts(originalPeriodicScripts);
-    setCurrentVersion(originalVersion); 
+    setCurrentVersion(originalVersion);
+    // Clear explicit operations on cancel
+    explicitOperationsRef.current = { row_moves: [], row_duplicates: [] };
     setIsEditing(false);
   };
+  
+  // Callbacks to register move/duplicate operations
+  const registerRowMove = useCallback((rowId, sourcePhaseNumber, targetPhaseNumber, targetPosition, sourceRowIndex) => {
+    if (!isManager) {
+      explicitOperationsRef.current.row_moves.push({
+        row_id: rowId,
+        source_phase_number: sourcePhaseNumber,
+        target_phase_number: targetPhaseNumber,
+        target_position: targetPosition,
+        source_row_index: sourceRowIndex // Store source position for description
+      });
+    }
+  }, [isManager]);
+  
+  const registerRowDuplicate = useCallback((sourceRowId, newRowId, targetPhaseNumber, targetPosition) => {
+    if (!isManager) {
+      explicitOperationsRef.current.row_duplicates.push({
+        source_row_id: sourceRowId,
+        new_row_id: newRowId, // Track the new duplicated row ID to prevent it from being detected as a new row
+        target_phase_number: targetPhaseNumber,
+        target_position: targetPosition
+      });
+    }
+  }, [isManager]);
 
   // Fetch pending changes (for managers)
   const fetchPendingChanges = useCallback(async () => {
@@ -342,13 +542,108 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   }, [isManager, project.id]);
 
+  // Socket.IO listener for real-time project data updates
+  useEffect(() => {
+    if (!project.id) return;
+
+    const socket = io(API_BASE_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5
+    });
+
+    socket.on('connect', () => {
+      socket.emit('join_project_room', { project_id: project.id });
+      // Join user-specific room for instant notifications
+      if (project.id && role && name) {
+        socket.emit('join_user_room', { project_id: project.id, role, name });
+      }
+    });
+    
+    socket.on('reconnect', () => {
+      socket.emit('join_project_room', { project_id: project.id });
+      if (project.id && role && name) {
+        socket.emit('join_user_room', { project_id: project.id, role, name });
+      }
+    });
+
+    socket.on('phases_updated', (data) => {
+      if (data.project_id === project.id && !isEditing) {
+        // Reload data when phases are updated (status changes, manager approvals, etc.)
+        loadProjectData(false).catch(() => {});
+      }
+    });
+
+    socket.on('pending_changes_notification', (data) => {
+      if (data.project_id === project.id && isManager && data.manager_role === role) {
+        fetchPendingChanges();
+        setReviewModalOpen(true);
+      }
+    });
+
+    socket.on('user_notification', (data) => {
+      // Handle real-time user notifications (e.g., manager nudge)
+      if (data.project_id === project.id && data.command && data.data && !isManager) {
+        // Process notification immediately via EditableTable's processNotification
+        if (processNotificationRef.current) {
+          processNotificationRef.current(data.command, data.data);
+          // Clear notification from database after processing
+          api.clearUserNotification(project.id, role, name).catch(() => {});
+        }
+      }
+    });
+
+    socket.on('pending_changes_updated', (data) => {
+      if (data.project_id === project.id && isManager) {
+        fetchPendingChanges();
+      }
+    });
+
+    socket.on('user_deactivated', (data) => {
+      if (data.project_id === project.id && data.role === role && data.name === name) {
+        setInactiveUserDialogOpen(true);
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [project.id, isEditing, loadProjectData, isManager, role, name, fetchPendingChanges]);
+
   // Handle accepting a pending change
   const handleAcceptPendingChange = async (changeId) => {
     try {
       const response = await api.acceptPendingChange(project.id, changeId, name);
       
-      // Refresh data from server (changes are already applied on backend)
-      await loadProjectData(false);
+      // If table_data is returned, use it to update local state (preserves row order)
+      if (response.table_data) {
+        
+        // Update currentTableData with the table_data from the submission
+        // This preserves the correct row order
+        
+        setCurrentTableData(response.table_data);
+        // Use efficient manual copy instead of structuredClone (faster and more compatible)
+        setOriginalTableData(deepCloneTableData(response.table_data));
+        
+        // Also update active phases
+        const activePhasesMap = {};
+        response.table_data.forEach(phase => {
+          activePhasesMap[phase.phase] = !!phase.is_active;
+        });
+        setActivePhases(activePhasesMap);
+        
+        // Set a flag to prevent reload from data_updated notification
+        // We'll use a ref to track this
+        justAcceptedWithTableDataRef.current = true;
+        setTimeout(() => {
+          justAcceptedWithTableDataRef.current = false;
+        }, 10000); // Prevent reload for 10 seconds after accepting (increased from 5)
+      } else {
+        // No table_data - refresh from server (normal case)
+        await loadProjectData(false);
+      }
+      
       const updatedChanges = await api.getPendingChanges(project.id, 'pending');
       setPendingChanges(updatedChanges);
       
@@ -380,6 +675,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   };
 
   // Poll for notifications (pending changes for managers, data updates for all users)
+  // Socket.IO handles real-time user notifications, polling is fallback only
   useEffect(() => {
     if (project.id && role && name) {
       const interval = setInterval(() => {
@@ -391,9 +687,32 @@ const MainScreen = ({ project, role, name, onLogout }) => {
               setReviewModalOpen(true);
               // Clear the notification
               api.clearUserNotification(project.id, role, name).catch(() => {});
+            } else if (response.command === 'show_modal' && response.data && !isManager) {
+              // Fallback: Handle show_modal notification if Socket.IO missed it
+              // Socket.IO should handle this in real-time, but polling ensures reliability
+              if (processNotificationRef.current) {
+                processNotificationRef.current(response.command, response.data);
+                // Clear the notification after processing
+                api.clearUserNotification(project.id, role, name).catch(() => {});
+              }
             } else if (response.command === 'data_updated' && response.data && !isEditing) {
-              // Refresh project data when updates are made
-              loadProjectData(false).catch(() => {});
+              // Parse notification data to check change_type
+              let notificationData = null;
+              try {
+                notificationData = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+              } catch (e) {
+                // Ignore parse errors
+              }
+              
+              const changeType = notificationData?.change_type;
+              
+              // Don't reload for row_move or row_duplicate changes because they require table_data
+              // to preserve order, and reloading from backend (ordered by ID) would lose the order.
+              // Also don't reload if we just accepted a change with table_data (to preserve order)
+              if (changeType !== 'row_move' && changeType !== 'row_duplicate' && !justAcceptedWithTableDataRef.current) {
+                // Refresh project data when updates are made
+                loadProjectData(false).catch(() => {});
+              }
               // Clear the notification
               api.clearUserNotification(project.id, role, name).catch(() => {});
             }
@@ -401,17 +720,17 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           .catch(err => {
             // Silently fail
           });
-      }, 2000);
+      }, 60000); // Poll every 60 seconds as fallback - Socket.IO handles real-time notifications
 
       return () => clearInterval(interval);
     }
-  }, [isManager, project.id, role, name, fetchPendingChanges, loadProjectData, isEditing]);
+  }, [isManager, project.id, role, name, fetchPendingChanges, loadProjectData, isEditing, processNotificationRef]);
 
   // Fetch pending changes on mount and periodically
   useEffect(() => {
     if (isManager) {
       fetchPendingChanges();
-      const interval = setInterval(fetchPendingChanges, 5000);
+      const interval = setInterval(fetchPendingChanges, 60000); // Poll every 60 seconds as fallback - Socket.IO handles real-time updates
       return () => clearInterval(interval);
     }
   }, [isManager, fetchPendingChanges]);
@@ -511,10 +830,21 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         project={projectDetails}
         role={role}
         name={name}
-        isEditing={isEditing}
+        isEditing={deferredIsEditing}
         currentVersion={currentVersion}
         setCurrentVersion={setCurrentVersion}
-        onToggleEdit={() => setIsEditing(true)}
+        onToggleEdit={() => {
+          const startTime = performance.now();
+          console.log('[Performance] Starting edit mode switch');
+          startTransition(() => {
+            setIsEditing(true);
+            // Log after state update
+            setTimeout(() => {
+              const endTime = performance.now();
+              console.log(`[Performance] Edit mode switch took ${(endTime - startTime).toFixed(2)}ms`);
+            }, 0);
+          });
+        }}
         onSave={handleSave}
         onCancel={handleCancel}
         clockTime={clockTime}
@@ -535,6 +865,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           lastReadMessageIndexRef.current = -1; // Will be updated by ProjectChat
           // Clear processed message IDs when opening chat to allow re-processing if needed
           processedMessageIdsRef.current.clear();
+          // Clear processed message IDs when opening chat to allow re-processing if needed
+          processedMessageIdsRef.current.clear();
         }}
         onChatClose={() => {
           setChatOpen(false);
@@ -551,7 +883,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         <EditableTable
           tableData={currentTableData}
           setTableData={setCurrentTableData}
-          isEditing={isEditing}
+          isEditing={deferredIsEditing}
           allRoles={allRoles}
           setAllRoles={setAllRoles}
           userRole={role}
@@ -559,6 +891,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           activePhases={activePhases}
           handleTogglePhaseActivation={handleTogglePhaseActivation}
           periodicScripts={periodicScripts}
+          registerRowMove={registerRowMove}
+          registerRowDuplicate={registerRowDuplicate}
           setPeriodicScripts={setPeriodicScripts}
           currentClockSeconds={totalSeconds}
           isClockRunning={timer.isRunning || isUsingTargetTime}
@@ -567,16 +901,29 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           activeLogins={activeLogins}
           projectId={project.id}
           userName={name}
+          onProcessNotification={(callback) => { processNotificationRef.current = callback; }}
         />
         
         <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>
-          <Button
-            variant="outlined"
-            color="secondary"
-            onClick={() => onLogout(project.id, name, role)}
-          >
-            התנתק
-          </Button>
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={() => onLogout(project.id, name, role)}
+            >
+              התנתק
+            </Button>
+            
+            {isManager && pendingChanges.length > 0 && (
+              <Button
+                variant="contained"
+                color="warning"
+                onClick={() => setReviewModalOpen(true)}
+              >
+                {pendingChanges.length} בקשות ממתינות
+              </Button>
+            )}
+          </Box>
           
           <Box sx={{ display: 'flex', gap: 2, direction: 'rtl' }}>
           {isManager && (
@@ -611,17 +958,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             )}
           </Box>
         </Box>
-
-        {isManager && pendingChanges.length > 0 && (
-          <Button
-            variant="contained"
-            color="warning"
-            onClick={() => setReviewModalOpen(true)}
-            sx={{ mt: 2 }}
-          >
-            {pendingChanges.length} בקשות ממתינות
-          </Button>
-        )}
       </Box>
 
       {/* Pending Changes Review Modal (Manager only) */}
@@ -642,6 +978,24 @@ const MainScreen = ({ project, role, name, onLogout }) => {
             ) : (
               <Box>
                 {(() => {
+                  // Helper function to get global row number from row ID
+                  // Use originalTableData to get the original position before any moves
+                  const getGlobalRowNumberFromId = (rowId) => {
+                    if (!rowId) return null;
+                    let globalCount = 0;
+                    // Use originalTableData to get the original position before moves
+                    for (let phaseIndex = 0; phaseIndex < originalTableData.length; phaseIndex++) {
+                      const phase = originalTableData[phaseIndex];
+                      for (let rowIndex = 0; rowIndex < phase.rows.length; rowIndex++) {
+                        globalCount++;
+                        if (phase.rows[rowIndex].id === rowId) {
+                          return globalCount;
+                        }
+                      }
+                    }
+                    return null;
+                  };
+                  
                   // Group changes by submission_id
                   const groupedBySubmission = {};
                   pendingChanges.forEach(change => {
@@ -676,6 +1030,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                             return null; // Skip already processed changes
                           }
                           
+                          // Skip table_data changes - they're metadata, not user-visible changes
+                          if (change.change_type === 'table_data') {
+                            return null;
+                          }
+                          
                           const changesData = typeof change.changes_data === 'string' 
                             ? JSON.parse(change.changes_data) 
                             : change.changes_data;
@@ -685,9 +1044,31 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                               case 'row_add':
                                 return `הוספת שורה - שלב ${changesData.phase_number || 'N/A'}`;
                               case 'row_update':
-                                return `עדכון שורה #${changesData.row_id || 'N/A'}`;
+                                const updateRowNumber = getGlobalRowNumberFromId(changesData.row_id);
+                                return `עדכון שורה #${updateRowNumber || changesData.row_id || 'N/A'}`;
                               case 'row_delete':
-                                return `מחיקת שורה #${changesData.row_id || 'N/A'}`;
+                                const deleteRowNumber = getGlobalRowNumberFromId(changesData.row_id);
+                                return `מחיקת שורה #${deleteRowNumber || changesData.row_id || 'N/A'}`;
+                              case 'row_duplicate':
+                                const duplicateRowNumber = getGlobalRowNumberFromId(changesData.source_row_id);
+                                return `שכפול שורה #${duplicateRowNumber || changesData.source_row_id || 'N/A'}`;
+                              case 'row_move':
+                                const moveRowNumber = getGlobalRowNumberFromId(changesData.row_id);
+                                const sourcePhase = changesData.source_phase_number || 'N/A';
+                                const targetPhase = changesData.target_phase_number || 'N/A';
+                                const targetPosition = changesData.target_position !== undefined ? changesData.target_position : null;
+                                const sourceRowIndex = changesData.source_row_index !== undefined ? changesData.source_row_index : null;
+                                if (sourcePhase === targetPhase && targetPosition !== null && sourceRowIndex !== null) {
+                                  const sourcePos = sourceRowIndex + 1; // Convert to 1-based
+                                  const targetPos = targetPosition + 1; // Convert to 1-based
+                                  return `העברת שורה #${moveRowNumber || changesData.row_id || 'N/A'} ממיקום ${sourcePos} למיקום ${targetPos} בשלב ${sourcePhase}`;
+                                } else if (sourcePhase === targetPhase && targetPosition !== null) {
+                                  return `העברת שורה #${moveRowNumber || changesData.row_id || 'N/A'} למיקום ${targetPosition + 1} בשלב ${sourcePhase}`;
+                                } else if (sourcePhase === targetPhase) {
+                                  return `שינוי מיקום שורה #${moveRowNumber || changesData.row_id || 'N/A'} בשלב ${sourcePhase}`;
+                                } else {
+                                  return `העברת שורה #${moveRowNumber || changesData.row_id || 'N/A'} משלב ${sourcePhase} לשלב ${targetPhase}`;
+                                }
                               case 'version':
                                 return `שינוי גרסה: ${changesData.new_version || 'N/A'} → ${changesData.old_version || 'N/A'}`;
                               case 'role_add':
@@ -873,6 +1254,32 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           </DialogActions>
         </Dialog>
       )}
+
+      {/* Inactive User Dialog */}
+      <Dialog
+        open={inactiveUserDialogOpen}
+        onClose={() => {}} // Prevent closing without clicking OK
+        disableEscapeKeyDown
+      >
+        <DialogTitle>המשתמש לא פעיל</DialogTitle>
+        <DialogContent>
+          <Typography>
+            המשתמש שלך הוגדר כלא פעיל. נדרש להתחבר מחדש.
+          </Typography>
+        </DialogContent>
+        <DialogActions style={{ direction: 'rtl' }}>
+          <Button
+            onClick={() => {
+              setInactiveUserDialogOpen(false);
+              onLogout();
+            }}
+            variant="contained"
+            color="primary"
+          >
+            אישור
+          </Button>
+        </DialogActions>
+      </Dialog>
       
       {/* ProjectChat - Always rendered to keep socket connection active */}
       {project && (

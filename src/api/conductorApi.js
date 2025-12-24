@@ -1,5 +1,5 @@
 // src/api/conductorApi.js
-import { request } from './client';
+import { request, API_BASE_URL } from './client';
 
 export const api = {
   // Projects
@@ -31,8 +31,8 @@ export const api = {
     }),
   deletePhase: (phaseId) =>
     request(`/api/phases/${phaseId}`, { method: 'DELETE' }),
-  togglePhaseActive: (phaseId) =>
-    request(`/api/phases/${phaseId}/toggle-active`, { method: 'PUT' }),
+  togglePhaseActive: (phaseId, payload = {}) =>
+    request(`/api/phases/${phaseId}/toggle-active`, { method: 'PUT', body: payload }),
 
   // Rows
   createRow: (phaseId, payload) =>
@@ -49,8 +49,8 @@ export const api = {
     request(`/api/rows/${rowId}`, {
       method: 'DELETE',
     }),
-  runRowScript: (rowId) =>
-    request(`/api/rows/${rowId}/run-script`, { method: 'POST' }),
+  runRowScript: (rowId, payload = {}) =>
+    request(`/api/rows/${rowId}/run-script`, { method: 'POST', body: payload }),
 
   // Periodic Scripts
   getPeriodicScripts: (projectId) =>
@@ -120,6 +120,11 @@ export const api = {
       method: 'POST',
       body: { name, role },
     }),
+  heartbeat: (projectId, name, role) =>
+    request(`/api/projects/${projectId}/heartbeat`, {
+      method: 'POST',
+      body: { name, role },
+    }),
 
   // User notifications
   createUserNotification: (projectId, targetRole, command, data = {}) =>
@@ -156,6 +161,29 @@ export const api = {
     request(`/api/projects/${projectId}/pending-changes/${changeId}/decline`, {
       method: 'POST',
       body: { reviewed_by: reviewedBy },
+    }),
+
+  // Action Logs
+  getActionLogs: (projectId, userRole, filters = {}) => {
+    const params = new URLSearchParams({ user_role: userRole, ...filters });
+    return request(`/api/projects/${projectId}/action-logs?${params.toString()}`);
+  },
+  downloadActionLogsPDF: (projectId, userRole) => {
+    const url = `${API_BASE_URL}/api/projects/${projectId}/action-logs/pdf?user_role=${encodeURIComponent(userRole)}`;
+    window.open(url, '_blank');
+  },
+  clearActionLogs: (projectId, userRole) =>
+    request(`/api/projects/${projectId}/action-logs`, {
+      method: 'DELETE',
+      body: { user_role: userRole },
+    }),
+  resetAllStatuses: (projectId, userName, userRole) =>
+    request(`/api/projects/${projectId}/reset-statuses`, {
+      method: 'POST',
+      body: {
+        user_name: userName,
+        user_role: userRole,
+      },
     }),
 };
 

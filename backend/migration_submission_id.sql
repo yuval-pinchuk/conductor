@@ -14,3 +14,6 @@ ADD COLUMN `timer_last_start_time` DATETIME NULL AFTER `timer_is_running`,
 ADD COLUMN `timer_initial_offset` INT NOT NULL DEFAULT 0 AFTER `timer_last_start_time`,
 ADD COLUMN `timer_target_datetime` DATETIME NULL AFTER `timer_initial_offset`;
 
+-- Add last_seen column to users table for heartbeat/stale session detection
+ALTER TABLE `users`
+ADD COLUMN `last_seen` DATETIME NULL AFTER `last_login`;

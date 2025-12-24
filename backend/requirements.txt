@@ -4,4 +4,7 @@ Flask-CORS==4.0.0
 Flask-SocketIO==5.3.5
 PyMySQL==1.1.0
 cryptography==41.0.7
+reportlab>=4.0.0
+python-bidi>=0.4.2
+requests>=2.31.0
 

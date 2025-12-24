@@ -24,6 +24,7 @@ class Project(db.Model):
     timer_last_start_time = db.Column(db.DateTime, nullable=True)  # Server timestamp when timer was started
     timer_initial_offset = db.Column(db.Integer, default=0, nullable=False)  # Total seconds elapsed before current run
     timer_target_datetime = db.Column(db.DateTime, nullable=True)  # Target datetime for countdown
+    reset_epoch = db.Column(db.Integer, default=0, nullable=False)  # Tracks current reset epoch for log differentiation
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -32,6 +33,7 @@ class Project(db.Model):
     roles = db.relationship('ProjectRole', backref='project', lazy=True, cascade='all, delete-orphan')
     periodic_scripts = db.relationship('PeriodicScript', backref='project', lazy=True, cascade='all, delete-orphan')
     messages = db.relationship('Message', backref='project', lazy=True, cascade='all, delete-orphan')
+    action_logs = db.relationship('ActionLog', backref='project', lazy=True, cascade='all, delete-orphan')
     
     def set_manager_password(self, raw_password: str):
         if raw_password:
@@ -90,7 +92,7 @@ class Phase(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    rows = db.relationship('Row', backref='phase', lazy=True, cascade='all, delete-orphan', order_by='Row.id')
+    rows = db.relationship('Row', backref='phase', lazy=True, cascade='all, delete-orphan', order_by='Row.updated_at, Row.id')
     
     __table_args__ = (db.UniqueConstraint('project_id', 'phase_number', name='unique_project_phase'),)
     
@@ -151,7 +153,8 @@ class PeriodicScript(db.Model):
             'id': self.id,
             'name': self.name,
             'path': self.path,
-            'status': self.status
+            'status': self.status,
+            'last_executed': self.last_executed.isoformat() if self.last_executed else None
         }
 
 
@@ -168,6 +171,7 @@ class User(db.Model):
     notification_data = db.Column(db.Text, nullable=True)  # JSON string with notification data
     notification_timestamp = db.Column(db.DateTime, nullable=True)
     last_login = db.Column(db.DateTime, nullable=True)
+    last_seen = db.Column(db.DateTime, nullable=True)  # Updated by heartbeat, used to detect stale sessions
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
@@ -180,7 +184,8 @@ class User(db.Model):
             'notification_command': self.notification_command,
             'notification_data': self.notification_data,
             'notification_timestamp': self.notification_timestamp.isoformat() if self.notification_timestamp else None,
-            'last_login': self.last_login.isoformat() if self.last_login else None
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None
         }
 
 
@@ -239,5 +244,38 @@ class Message(db.Model):
             'content': self.content,
             'userRole': self.user_role or 'Unknown',
             'userId': self.user_id,
+            'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None
+        }
+
+
+class ActionLog(db.Model):
+    """Action log table - stores user actions for auditing"""
+    __tablename__ = 'action_logs'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_name = db.Column(db.String(255), nullable=False)
+    user_role = db.Column(db.String(100), nullable=False)
+    action_type = db.Column(db.String(50), nullable=False)  # 'row_status_change', 'script_execution', 'phase_activation'
+    action_details = db.Column(db.Text, nullable=True)  # JSON string for flexible data storage
+    script_result = db.Column(db.Boolean, nullable=True)  # Only for script executions
+    row_id = db.Column(db.Integer, nullable=True)  # For row-related actions
+    phase_id = db.Column(db.Integer, nullable=True)  # For phase-related actions
+    reset_epoch = db.Column(db.Integer, default=0, nullable=False, index=True)  # Tracks which reset epoch this log belongs to
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    def to_dict(self):
+        import json
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'user_name': self.user_name,
+            'user_role': self.user_role,
+            'action_type': self.action_type,
+            'action_details': json.loads(self.action_details) if self.action_details else None,
+            'script_result': self.script_result,
+            'row_id': self.row_id,
+            'phase_id': self.phase_id,
+            'reset_epoch': self.reset_epoch,
             'timestamp': self.timestamp.isoformat() + 'Z' if self.timestamp else None
         }
