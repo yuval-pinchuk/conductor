@@ -865,6 +865,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           lastReadMessageIndexRef.current = -1; // Will be updated by ProjectChat
           // Clear processed message IDs when opening chat to allow re-processing if needed
           processedMessageIdsRef.current.clear();
+          // Clear processed message IDs when opening chat to allow re-processing if needed
+          processedMessageIdsRef.current.clear();
         }}
         onChatClose={() => {
           setChatOpen(false);

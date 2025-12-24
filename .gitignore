@@ -25,3 +25,10 @@ yarn-error.log*
 
 # Large files
 conductor.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
