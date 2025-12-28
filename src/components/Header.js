@@ -11,6 +11,7 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Clock icon
 import ChatIcon from '@mui/icons-material/Chat'; // Chat icon
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'; // PDF download icon
 import TableChartIcon from '@mui/icons-material/TableChart'; // Excel export icon
+import LinkIcon from '@mui/icons-material/Link'; // Hyperlink icon
 import { api } from '../api/conductorApi';
 
 const Header = ({ 
@@ -35,7 +36,8 @@ const Header = ({
     isSaving = false,
     unreadMessageCount = 0,
     onChatOpen,
-    onChatClose
+    onChatClose,
+    onDocumentsOpen
 }) => {
   const [isEditingClock, setIsEditingClock] = useState(false);
   const [tempClockInput, setTempClockInput] = useState(clockTime);
@@ -246,6 +248,17 @@ const Header = ({
               <ChatIcon />
             </IconButton>
           </Badge>
+          
+          {/* Related Documents Icon */}
+          <IconButton 
+            color="inherit" 
+            onClick={() => {
+              if (onDocumentsOpen) onDocumentsOpen();
+            }} 
+            title="Related Documents"
+          >
+            <LinkIcon />
+          </IconButton>
           
           {/* Download Action Log Button (Manager Only) */}
           {isManager && project && (

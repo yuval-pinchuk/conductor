@@ -1,7 +1,8 @@
 # backend/api.py
 
 from flask import Blueprint, request, jsonify, current_app, send_file
-from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog
+import os
+from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog, RelatedDocument
 from sqlalchemy import func, text
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
@@ -692,6 +693,154 @@ def delete_periodic_script(script_id):
     db.session.delete(script)
     db.session.commit()
     return jsonify({'message': 'Script deleted'}), 200
+
+
+# ==================== RELATED DOCUMENTS ENDPOINTS ====================
+
+@api.route('/api/projects/<int:project_id>/related-documents', methods=['GET'])
+def get_related_documents(project_id):
+    """Get all related documents for a project"""
+    project = Project.query.get_or_404(project_id)
+    documents = RelatedDocument.query.filter_by(project_id=project_id).order_by(RelatedDocument.order_index, RelatedDocument.id).all()
+    return jsonify([doc.to_dict() for doc in documents]), 200
+
+
+@api.route('/api/projects/<int:project_id>/related-documents', methods=['POST'])
+def create_related_document(project_id):
+    """Create a new related document (manager only)"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    # Check if user is manager
+    user_role = data.get('user_role', '')
+    if project.manager_role != user_role:
+        return jsonify({'error': 'Only managers can create related documents'}), 403
+    
+    name = data.get('name', '').strip()
+    url = data.get('url', '').strip()
+    is_local_file = data.get('is_local_file', False)
+    order_index = data.get('order_index', 0)
+    
+    if not name:
+        return jsonify({'error': 'Name is required'}), 400
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+    
+    # Get max order_index if not provided
+    if order_index == 0:
+        max_order = db.session.query(func.max(RelatedDocument.order_index)).filter_by(project_id=project_id).scalar()
+        order_index = (max_order or 0) + 1
+    
+    document = RelatedDocument(
+        project_id=project_id,
+        name=name,
+        url=url,
+        is_local_file=bool(is_local_file),
+        order_index=order_index
+    )
+    db.session.add(document)
+    db.session.commit()
+    
+    return jsonify(document.to_dict()), 201
+
+
+@api.route('/api/related-documents/<int:doc_id>', methods=['PUT'])
+def update_related_document(doc_id):
+    """Update a related document (manager only)"""
+    document = RelatedDocument.query.get_or_404(doc_id)
+    project = Project.query.get(document.project_id)
+    data = request.get_json()
+    
+    # Check if user is manager
+    user_role = data.get('user_role', '')
+    if project.manager_role != user_role:
+        return jsonify({'error': 'Only managers can update related documents'}), 403
+    
+    if 'name' in data:
+        document.name = data['name'].strip()
+    if 'url' in data:
+        document.url = data['url'].strip()
+    if 'is_local_file' in data:
+        document.is_local_file = bool(data['is_local_file'])
+    if 'order_index' in data:
+        document.order_index = int(data['order_index'])
+    
+    document.updated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify(document.to_dict()), 200
+
+
+@api.route('/api/related-documents/<int:doc_id>', methods=['DELETE'])
+def delete_related_document(doc_id):
+    """Delete a related document (manager only)"""
+    document = RelatedDocument.query.get_or_404(doc_id)
+    project = Project.query.get(document.project_id)
+    data = request.get_json() or {}
+    
+    # Check if user is manager
+    user_role = data.get('user_role', '')
+    if project.manager_role != user_role:
+        return jsonify({'error': 'Only managers can delete related documents'}), 403
+    
+    db.session.delete(document)
+    db.session.commit()
+    return jsonify({'message': 'Document deleted'}), 200
+
+
+@api.route('/api/files/<path:file_path>', methods=['GET'])
+def serve_file(file_path):
+    """Serve local files securely with path validation"""
+    # Normalize the path to prevent directory traversal
+    # Remove any '..' or absolute path attempts
+    normalized_path = os.path.normpath(file_path)
+    
+    # Prevent directory traversal attacks
+    if '..' in normalized_path or normalized_path.startswith('/'):
+        return jsonify({'error': 'Invalid file path'}), 400
+    
+    # Get the base directory for files (can be configured in config.py)
+    # Default to a 'files' directory in the backend folder
+    base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'files')
+    
+    # Ensure the base directory exists
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir, exist_ok=True)
+    
+    # Construct the full file path
+    full_path = os.path.join(base_dir, normalized_path)
+    
+    # Ensure the resolved path is within the base directory
+    real_base = os.path.realpath(base_dir)
+    real_file = os.path.realpath(full_path)
+    
+    if not real_file.startswith(real_base):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Check if file exists
+    if not os.path.exists(real_file) or not os.path.isfile(real_file):
+        return jsonify({'error': 'File not found'}), 404
+    
+    # Determine MIME type based on file extension
+    _, ext = os.path.splitext(real_file)
+    mime_types = {
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.html': 'text/html',
+        '.htm': 'text/html',
+    }
+    
+    mimetype = mime_types.get(ext.lower(), 'application/octet-stream')
+    
+    return send_file(real_file, mimetype=mimetype)
 
 
 @api.route('/api/periodic-scripts/<int:script_id>/execute', methods=['POST'])

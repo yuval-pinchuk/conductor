@@ -95,6 +95,29 @@ export const api = {
       body: { password },
     }),
 
+  // Related Documents
+  getRelatedDocuments: (projectId) =>
+    request(`/api/projects/${projectId}/related-documents`),
+  createRelatedDocument: (projectId, payload) =>
+    request(`/api/projects/${projectId}/related-documents`, {
+      method: 'POST',
+      body: payload,
+    }),
+  updateRelatedDocument: (docId, payload) =>
+    request(`/api/related-documents/${docId}`, {
+      method: 'PUT',
+      body: payload,
+    }),
+  deleteRelatedDocument: (docId, payload = {}) =>
+    request(`/api/related-documents/${docId}`, {
+      method: 'DELETE',
+      body: payload,
+    }),
+  getFile: (filePath) =>
+    request(`/api/files/${encodeURIComponent(filePath)}`, {
+      method: 'GET',
+    }),
+
   // Bulk updates
   updateTableData: (projectId, phasesPayload, userName, userRole) =>
     request(`/api/projects/${projectId}/table-data`, {

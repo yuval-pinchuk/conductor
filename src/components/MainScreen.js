@@ -5,6 +5,7 @@ import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
 import ProjectChat from './ProjectChat';
+import RelatedDocuments from './RelatedDocuments';
 import usePageVisibility from '../hooks/usePageVisibility';
 import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -90,6 +91,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Periodic Scripts State
   const [periodicScripts, setPeriodicScripts] = useState([]);
   const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([]);
+  
+  // Related Documents State
+  const [relatedDocuments, setRelatedDocuments] = useState([]);
+  const [originalRelatedDocuments, setOriginalRelatedDocuments] = useState([]);
+  const [documentsDrawerOpen, setDocumentsDrawerOpen] = useState(false);
   
   // Active Logins State
   const [activeLogins, setActiveLogins] = useState([]);
@@ -256,6 +262,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       const scriptsData = await api.getPeriodicScripts(project.id);
       setPeriodicScripts(scriptsData);
       setOriginalPeriodicScripts(deepCloneArray(scriptsData));
+      
+      // Fetch related documents
+      const documentsData = await api.getRelatedDocuments(project.id);
+      setRelatedDocuments(documentsData);
+      setOriginalRelatedDocuments(deepCloneArray(documentsData));
       
       // Fetch active logins
       const loginsData = await api.getActiveLogins(project.id);
@@ -439,6 +450,50 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         await api.updatePeriodicScriptsBulk(project.id, periodicScripts, name, role);
         await api.updateProjectVersion(project.id, currentVersion);
         
+        // Save related documents
+        // Get existing documents from backend to compare
+        const existingDocs = await api.getRelatedDocuments(project.id);
+        const existingDocIds = new Set(existingDocs.map(doc => doc.id));
+        const currentDocIds = new Set(relatedDocuments.map(doc => doc.id));
+        
+        // Delete documents that were removed
+        for (const existingDoc of existingDocs) {
+          if (!currentDocIds.has(existingDoc.id)) {
+            await api.deleteRelatedDocument(existingDoc.id, { user_role: role });
+          }
+        }
+        
+        // Create or update documents
+        for (const doc of relatedDocuments) {
+          if (doc.id === 'new') {
+            // New document - create it
+            await api.createRelatedDocument(project.id, {
+              name: doc.name,
+              url: doc.url,
+              is_local_file: doc.is_local_file,
+              order_index: doc.order_index,
+              user_role: role,
+            });
+          } else if (existingDocIds.has(doc.id)) {
+            // Existing document - check if it changed
+            const existingDoc = existingDocs.find(d => d.id === doc.id);
+            if (existingDoc && (
+              existingDoc.name !== doc.name ||
+              existingDoc.url !== doc.url ||
+              existingDoc.is_local_file !== doc.is_local_file ||
+              existingDoc.order_index !== doc.order_index
+            )) {
+              await api.updateRelatedDocument(doc.id, {
+                name: doc.name,
+                url: doc.url,
+                is_local_file: doc.is_local_file,
+                order_index: doc.order_index,
+                user_role: role,
+              });
+            }
+          }
+        }
+        
         // Update roles
         const currentRoles = await api.getProjectRoles(project.id);
         const currentRoleNames = new Set(currentRoles);
@@ -452,11 +507,17 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         
         // Note: Role deletion would need a separate endpoint
         
+        // Reload related documents to get updated IDs
+        const updatedDocuments = await api.getRelatedDocuments(project.id);
+        
         // Update local state
         const clonedData = deepCloneTableData(currentTableData);
         const clonedScripts = deepCloneArray(periodicScripts);
+        const clonedDocuments = deepCloneArray(updatedDocuments);
         setOriginalTableData(clonedData);
         setOriginalPeriodicScripts(clonedScripts);
+        setOriginalRelatedDocuments(clonedDocuments);
+        setRelatedDocuments(updatedDocuments);
         setOriginalVersion(currentVersion);
         setProjectDetails(prev => ({
           ...prev,
@@ -528,6 +589,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     // 2. Revert to the deep clone saved at the start of the session
     setCurrentTableData(originalTableData); 
     setPeriodicScripts(originalPeriodicScripts);
+    setRelatedDocuments(originalRelatedDocuments);
     setCurrentVersion(originalVersion);
     // Clear explicit operations on cancel
     explicitOperationsRef.current = { row_moves: [], row_duplicates: [] };
@@ -923,6 +985,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         onChatClose={() => {
           setChatOpen(false);
         }}
+        onDocumentsOpen={() => {
+          setDocumentsDrawerOpen(true);
+        }}
       />
       
       {dataError && (
@@ -954,6 +1019,18 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           projectId={project.id}
           userName={name}
           onProcessNotification={(callback) => { processNotificationRef.current = callback; }}
+        />
+        
+        <RelatedDocuments
+          documents={relatedDocuments}
+          setDocuments={setRelatedDocuments}
+          isManager={isManager}
+          projectId={project.id}
+          userName={name}
+          userRole={role}
+          isEditing={isEditing}
+          open={documentsDrawerOpen}
+          onClose={() => setDocumentsDrawerOpen(false)}
         />
         
         <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>
