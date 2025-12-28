@@ -19,8 +19,8 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = tr
   // Ref to store socket for cleanup
   const socketRef = useRef(null);
 
-  // Socket URL: Define const SOCKET_URL
-  const SOCKET_URL = 'http://localhost:5000';
+  // Socket URL: Use API_BASE_URL for consistency
+  const SOCKET_URL = API_BASE_URL;
 
   // Part 2 & 3: Data Flow within loadChatData
   useEffect(() => {

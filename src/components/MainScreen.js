@@ -47,6 +47,26 @@ const deepCloneTableData = (data) => {
   }));
 };
 
+// Helper function for deep copying arrays of objects (e.g., periodic scripts)
+// More efficient than JSON.parse(JSON.stringify()) and handles all data types correctly
+const deepCloneArray = (data) => {
+  if (!Array.isArray(data)) {
+    // If not an array, return a shallow copy of the object
+    return data ? { ...data } : data;
+  }
+  return data.map(item => ({ ...item }));
+};
+
+// Helper function to patch/update a row in table data
+// Moved outside component since it doesn't depend on any state/props
+const patchRows = (data, rowId, updates) =>
+  data.map(phase => ({
+    ...phase,
+    rows: phase.rows.map(row =>
+      row.id === rowId ? { ...row, ...updates } : row
+    ),
+  }));
+
 const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === project.manager_role;
   const isVisible = usePageVisibility();
@@ -135,14 +155,6 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
     messageIds.add(messageId);
   }, []);
-
-  const patchRows = (data, rowId, updates) =>
-    data.map(phase => ({
-      ...phase,
-      rows: phase.rows.map(row =>
-        row.id === rowId ? { ...row, ...updates } : row
-      ),
-    }));
 
   const applyRowUpdates = (rowId, updates, { syncOriginal = true } = {}) => {
     setCurrentTableData(prev => patchRows(prev, rowId, updates));
@@ -243,7 +255,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       // Fetch periodic scripts
       const scriptsData = await api.getPeriodicScripts(project.id);
       setPeriodicScripts(scriptsData);
-      setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsData)));
+      setOriginalPeriodicScripts(deepCloneArray(scriptsData));
       
       // Fetch active logins
       const loginsData = await api.getActiveLogins(project.id);
@@ -441,8 +453,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         // Note: Role deletion would need a separate endpoint
         
         // Update local state
-        const clonedData = JSON.parse(JSON.stringify(currentTableData));
-        const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
+        const clonedData = deepCloneTableData(currentTableData);
+        const clonedScripts = deepCloneArray(periodicScripts);
         setOriginalTableData(clonedData);
         setOriginalPeriodicScripts(clonedScripts);
         setOriginalVersion(currentVersion);
@@ -557,6 +569,24 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   }, [isManager, project.id]);
 
+  // Refs for socket handlers to avoid recreating socket connection
+  const isEditingRef = useRef(isEditing);
+  const loadProjectDataRef = useRef(loadProjectData);
+  const fetchPendingChangesRef = useRef(fetchPendingChanges);
+
+  // Keep refs synchronized with current values
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  useEffect(() => {
+    loadProjectDataRef.current = loadProjectData;
+  }, [loadProjectData]);
+
+  useEffect(() => {
+    fetchPendingChangesRef.current = fetchPendingChanges;
+  }, [fetchPendingChanges]);
+
   // Socket.IO listener for real-time project data updates
   useEffect(() => {
     if (!project.id) return;
@@ -584,15 +614,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     });
 
     socket.on('phases_updated', (data) => {
-      if (data.project_id === project.id && !isEditing) {
+      if (data.project_id === project.id && !isEditingRef.current) {
         // Reload data when phases are updated (status changes, manager approvals, etc.)
-        loadProjectData(false).catch(() => {});
+        loadProjectDataRef.current(false).catch(() => {});
       }
     });
 
     socket.on('pending_changes_notification', (data) => {
       if (data.project_id === project.id && isManager && data.manager_role === role) {
-        fetchPendingChanges();
+        fetchPendingChangesRef.current();
         setReviewModalOpen(true);
       }
     });
@@ -611,7 +641,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
     socket.on('pending_changes_updated', (data) => {
       if (data.project_id === project.id && isManager) {
-        fetchPendingChanges();
+        fetchPendingChangesRef.current();
       }
     });
 
@@ -631,7 +661,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       socket.off('user_deactivated');
       socket.disconnect();
     };
-  }, [project.id, isEditing, loadProjectData, isManager, role, name, fetchPendingChanges]);
+  }, [project.id, isManager, role, name]);
 
   // Handle accepting a pending change
   const handleAcceptPendingChange = async (changeId) => {
