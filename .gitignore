@@ -7,7 +7,11 @@
 
 # testing
 /coverage
+
+# Cursor IDE
 /.cursor
+.cursor/debug.log
+**/.cursor/debug.log
 
 # production
 /build
@@ -32,6 +36,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
+*.pyc
+*.pyo
+*.pyd
 
 # IDE - IntelliJ IDEA
 .idea/workspace.xml

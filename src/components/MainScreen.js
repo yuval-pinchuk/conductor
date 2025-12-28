@@ -408,8 +408,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     try {
       if (isManager) {
         // Manager saves directly
-        await api.updateTableData(project.id, currentTableData);
-        await api.updatePeriodicScriptsBulk(project.id, periodicScripts);
+        await api.updateTableData(project.id, currentTableData, name, role);
+        await api.updatePeriodicScriptsBulk(project.id, periodicScripts, name, role);
         await api.updateProjectVersion(project.id, currentVersion);
         
         // Update roles

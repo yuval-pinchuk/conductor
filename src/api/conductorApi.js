@@ -96,15 +96,23 @@ export const api = {
     }),
 
   // Bulk updates
-  updateTableData: (projectId, phasesPayload) =>
+  updateTableData: (projectId, phasesPayload, userName, userRole) =>
     request(`/api/projects/${projectId}/table-data`, {
       method: 'PUT',
-      body: phasesPayload,
+      body: {
+        phases: phasesPayload,
+        user_name: userName,
+        user_role: userRole
+      },
     }),
-  updatePeriodicScriptsBulk: (projectId, scriptsPayload) =>
+  updatePeriodicScriptsBulk: (projectId, scriptsPayload, userName, userRole) =>
     request(`/api/projects/${projectId}/periodic-scripts/bulk`, {
       method: 'PUT',
-      body: scriptsPayload,
+      body: {
+        scripts: scriptsPayload,
+        user_name: userName,
+        user_role: userRole
+      },
     }),
 
   // User/Login management
@@ -185,5 +193,9 @@ export const api = {
         user_role: userRole,
       },
     }),
+  exportProjectExcel: (projectId) => {
+    const url = `${API_BASE_URL}/api/projects/${projectId}/export-excel`;
+    window.open(url, '_blank');
+  },
 };
 

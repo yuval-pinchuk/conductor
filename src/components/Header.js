@@ -9,7 +9,8 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow'; // Play icon
 import StopIcon from '@mui/icons-material/Stop';       // Stop icon
 import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Clock icon
 import ChatIcon from '@mui/icons-material/Chat'; // Chat icon
-import DownloadIcon from '@mui/icons-material/Download'; // Download icon
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'; // PDF download icon
+import TableChartIcon from '@mui/icons-material/TableChart'; // Excel export icon
 import { api } from '../api/conductorApi';
 
 const Header = ({ 
@@ -255,7 +256,20 @@ const Header = ({
               }} 
               title="Download Action Log"
             >
-              <DownloadIcon />
+              <PictureAsPdfIcon />
+            </IconButton>
+          )}
+          
+          {/* Export Excel Button (Manager Only) */}
+          {isManager && project && (
+            <IconButton 
+              color="inherit" 
+              onClick={() => {
+                api.exportProjectExcel(project.id);
+              }} 
+              title="Export Project to Excel"
+            >
+              <TableChartIcon />
             </IconButton>
           )}
         </div>

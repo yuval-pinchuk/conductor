@@ -349,7 +349,7 @@ const TableRowComponent = memo(({
                 >
                   הרץ סקריפט
                 </Button>
-                {row.scriptResult !== undefined && (
+                {row.scriptResult != null && (
                   row.scriptResult ? (
                     <CheckIcon color="success" style={{ fontSize: 24 }} />
                   ) : (
