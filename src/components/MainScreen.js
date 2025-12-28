@@ -465,7 +465,8 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         
         // Create or update documents
         for (const doc of relatedDocuments) {
-          if (doc.id === 'new') {
+          // Check if it's a new document (temp ID starting with 'temp_' or old 'new' ID)
+          if (typeof doc.id === 'string' && (doc.id.startsWith('temp_') || doc.id === 'new')) {
             // New document - create it
             await api.createRelatedDocument(project.id, {
               name: doc.name,

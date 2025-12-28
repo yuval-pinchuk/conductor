@@ -33,7 +33,9 @@ const RelatedDocuments = ({ documents, setDocuments, isManager, projectId, userN
   const [newDocIsLocal, setNewDocIsLocal] = useState(false);
 
   const handleAddNew = () => {
-    setEditingDoc({ id: 'new', name: '', url: '', is_local_file: false });
+    // Generate unique temporary ID for new document
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setEditingDoc({ id: tempId, name: '', url: '', is_local_file: false });
     setNewDocName('');
     setNewDocUrl('');
     setNewDocIsLocal(false);
@@ -47,11 +49,12 @@ const RelatedDocuments = ({ documents, setDocuments, isManager, projectId, userN
   };
 
   const handleSaveNew = () => {
-    if (!newDocName.trim() || !newDocUrl.trim()) {
+    if (!newDocName.trim() || !newDocUrl.trim() || !editingDoc) {
       return;
     }
+    // Use the temporary ID from editingDoc instead of hardcoding 'new'
     const newDoc = {
-      id: 'new',
+      id: editingDoc.id, // Use the unique temp ID
       name: newDocName.trim(),
       url: newDocUrl.trim(),
       is_local_file: newDocIsLocal,
@@ -160,7 +163,9 @@ const RelatedDocuments = ({ documents, setDocuments, isManager, projectId, userN
 
         {displayDocuments.length > 0 && (
           <List sx={{ direction: 'rtl' }}>
-            {displayDocuments.map((doc) => (
+            {displayDocuments.map((doc) => {
+              const isEditingMatch = isEditing && isManager && editingDoc && editingDoc.id === doc.id;
+              return (
               <ListItem
                 key={doc.id}
                 sx={{
@@ -171,7 +176,7 @@ const RelatedDocuments = ({ documents, setDocuments, isManager, projectId, userN
                   '&:hover': { backgroundColor: '#333' },
                 }}
               >
-                {isEditing && isManager && editingDoc && editingDoc.id === doc.id ? (
+                {isEditingMatch ? (
                   <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
                     <TextField
                       label="שם"
@@ -276,7 +281,8 @@ const RelatedDocuments = ({ documents, setDocuments, isManager, projectId, userN
                   </>
                 )}
               </ListItem>
-            ))}
+            );
+            })}
           </List>
         )}
 
@@ -293,7 +299,7 @@ const RelatedDocuments = ({ documents, setDocuments, isManager, projectId, userN
           </Box>
         )}
 
-        {isEditing && isManager && editingDoc && editingDoc.id === 'new' && (
+        {isEditing && isManager && editingDoc && editingDoc.id && typeof editingDoc.id === 'string' && editingDoc.id.startsWith('temp_') && !documents.some(doc => doc.id === editingDoc.id) && (
           <Box sx={{ mt: 2, p: 2, border: '1px solid #555', borderRadius: 1, backgroundColor: '#2d2d2d' }}>
             <TextField
               label="שם"
