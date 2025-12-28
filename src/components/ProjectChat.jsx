@@ -5,6 +5,9 @@ import { io } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 
 const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = true }) => {
+  // Maximum number of messages to keep in memory (prevents unbounded growth)
+  const MAX_CHAT_MESSAGES = 500;
+  
   // State Management
   const [socket, setSocket] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -36,7 +39,7 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = tr
         
         // Use setMessages to populate the state with the historical data
         // Transform the API response to match the expected message format
-        const formattedMessages = historyData.map(msg => ({
+        let formattedMessages = historyData.map(msg => ({
           id: msg.id, // Include ID for deduplication
           user: msg.user || msg.userName || 'Unknown',
           userName: msg.userName || msg.user || 'Unknown',
@@ -44,6 +47,11 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = tr
           message: msg.message || msg.content || '',
           timestamp: msg.timestamp || new Date().toISOString()
         }));
+        
+        // Limit initial messages to prevent unbounded growth
+        if (formattedMessages.length > MAX_CHAT_MESSAGES) {
+          formattedMessages = formattedMessages.slice(-MAX_CHAT_MESSAGES);
+        }
         
         setMessages(formattedMessages);
 
@@ -93,7 +101,12 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = tr
               return prevMessages; // Don't add duplicate
             }
             
-            const updated = [...prevMessages, newMessage];
+            let updated = [...prevMessages, newMessage];
+            // Limit messages array size to prevent unbounded growth
+            if (updated.length > MAX_CHAT_MESSAGES) {
+              // Keep only the most recent messages
+              updated = updated.slice(-MAX_CHAT_MESSAGES);
+            }
             // Notify parent about new message (for unread count)
             // Only notify if this is a new message (not a duplicate we just filtered)
             if (onNewMessage && !isDuplicate) {
@@ -143,7 +156,12 @@ const ProjectChat = ({ projectId, userId, userRole, onNewMessage, isVisible = tr
               return prevMessages; // Don't add duplicate
             }
             
-            const updated = [...prevMessages, newMessage];
+            let updated = [...prevMessages, newMessage];
+            // Limit messages array size to prevent unbounded growth
+            if (updated.length > MAX_CHAT_MESSAGES) {
+              // Keep only the most recent messages
+              updated = updated.slice(-MAX_CHAT_MESSAGES);
+            }
             // Only notify if this is a new message (not a duplicate we just filtered)
             if (onNewMessage && !isDuplicate) {
               onNewMessage(updated.length - 1, newMessage.id || data.id);

@@ -120,6 +120,21 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const processNotificationRef = useRef(null);
   const periodicScriptTimeoutsRef = useRef({}); // Store timeout IDs for each periodic script
   const executePeriodicScriptRef = useRef(null); // Store latest executePeriodicScript function
+  
+  // Maximum number of processed message IDs to keep in memory (prevents unbounded growth)
+  const MAX_PROCESSED_MESSAGE_IDS = 1000;
+  
+  // Helper function to add message ID with size limiting
+  const addProcessedMessageId = useCallback((messageId) => {
+    const messageIds = processedMessageIdsRef.current;
+    if (messageIds.size >= MAX_PROCESSED_MESSAGE_IDS) {
+      // Remove oldest entries (first N entries when converted to array)
+      const idsArray = Array.from(messageIds);
+      const removeCount = Math.floor(MAX_PROCESSED_MESSAGE_IDS * 0.2); // Remove 20% when limit reached
+      idsArray.slice(0, removeCount).forEach(id => messageIds.delete(id));
+    }
+    messageIds.add(messageId);
+  }, []);
 
   const patchRows = (data, rowId, updates) =>
     data.map(phase => ({
@@ -607,6 +622,13 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     });
 
     return () => {
+      socket.off('connect');
+      socket.off('reconnect');
+      socket.off('phases_updated');
+      socket.off('pending_changes_notification');
+      socket.off('user_notification');
+      socket.off('pending_changes_updated');
+      socket.off('user_deactivated');
       socket.disconnect();
     };
   }, [project.id, isEditing, loadProjectData, isManager, role, name, fetchPendingChanges]);
@@ -1303,7 +1325,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                 onNewMessage={(messageIndex, messageId) => {
                   // Increment unread count when chat is closed, but only if we haven't processed this message ID
                   if (messageId && !processedMessageIdsRef.current.has(messageId)) {
-                    processedMessageIdsRef.current.add(messageId);
+                    addProcessedMessageId(messageId);
                     setUnreadMessageCount(prev => prev + 1);
                   } else if (!messageId) {
                     // Fallback: if no ID, still increment (for backwards compatibility)
@@ -1362,7 +1384,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                     lastReadMessageIndexRef.current = messageIndex;
                     // Track this message as processed
                     if (messageId) {
-                      processedMessageIdsRef.current.add(messageId);
+                      addProcessedMessageId(messageId);
                     }
                   }}
                 />
