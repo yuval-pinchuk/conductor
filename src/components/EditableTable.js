@@ -13,7 +13,8 @@ import ToggleOnIcon from '@mui/icons-material/ToggleOn';
 import ToggleOffIcon from '@mui/icons-material/ToggleOff';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
-import WarningIcon from '@mui/icons-material/Warning';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { api } from '../api/conductorApi';
@@ -348,7 +349,7 @@ const TableRowComponent = memo(({
                 >
                   הרץ סקריפט
                 </Button>
-                {row.scriptResult !== undefined && (
+                {row.scriptResult != null && (
                   row.scriptResult ? (
                     <CheckIcon color="success" style={{ fontSize: 24 }} />
                   ) : (
@@ -391,12 +392,8 @@ const TableRowComponent = memo(({
               disabled={!canChangeStatus}
               color={row.status === 'N/A' ? 'default' : 'default'}
               title="לא רלוונטי"
-              sx={{
-                border: row.status === 'N/A' ? '2px solid #999' : '1px solid transparent',
-                borderRadius: '4px'
-              }}
             >
-              <Typography variant="caption" sx={{ fontSize: '0.75rem' }}>N/A</Typography>
+              <RemoveCircleOutlineIcon />
             </IconButton>
             {/* User Info Button for Manager (available always, not just in edit mode) */}
             {isManager && (
@@ -406,7 +403,7 @@ const TableRowComponent = memo(({
                 color="warning"
                 title="שלח התראה למשתמש"
               >
-                <WarningIcon />
+                <NotificationsIcon />
               </IconButton>
             )}
           </div>

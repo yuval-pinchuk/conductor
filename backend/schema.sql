@@ -71,21 +71,37 @@
      ON DELETE CASCADE
  ) ENGINE=InnoDB;
  
- -- Periodic scripts table
- CREATE TABLE `periodic_scripts` (
-   `id` INT AUTO_INCREMENT PRIMARY KEY,
-   `project_id` INT NOT NULL,
-   `name` VARCHAR(255) NOT NULL,
-   `path` VARCHAR(500) NOT NULL,
-   `status` TINYINT(1) NOT NULL DEFAULT 0,
-   `last_executed` DATETIME NULL,
-   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-   CONSTRAINT `fk_periodic_scripts_project`
-     FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
-     ON DELETE CASCADE
- ) ENGINE=InnoDB;
- 
+-- Periodic scripts table
+CREATE TABLE `periodic_scripts` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `project_id` INT NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `path` VARCHAR(500) NOT NULL,
+  `status` TINYINT(1) NOT NULL DEFAULT 0,
+  `last_executed` DATETIME NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_periodic_scripts_project`
+    FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- Related documents table
+CREATE TABLE `related_documents` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `project_id` INT NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `url` VARCHAR(1000) NOT NULL,
+  `is_local_file` TINYINT(1) NOT NULL DEFAULT 0,
+  `order_index` INT NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_related_documents_project`
+    FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`)
+    ON DELETE CASCADE,
+  INDEX `idx_related_documents_project_id` (`project_id`)
+) ENGINE=InnoDB;
+
 -- Users table (tracks active logins)
 CREATE TABLE `users` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,

@@ -163,6 +163,8 @@ const LoginScreen = ({ onLogin }) => {
     });
 
     return () => {
+      socket.off('connect');
+      socket.off('active_logins_updated');
       socket.disconnect();
     };
   }, [selectedProjectId]);

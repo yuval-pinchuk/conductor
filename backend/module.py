@@ -248,6 +248,32 @@ class Message(db.Model):
         }
 
 
+class RelatedDocument(db.Model):
+    """Related documents table - stores links to related documents (URLs or local files)"""
+    __tablename__ = 'related_documents'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    url = db.Column(db.String(1000), nullable=False)
+    is_local_file = db.Column(db.Boolean, default=False, nullable=False)
+    order_index = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'name': self.name,
+            'url': self.url,
+            'is_local_file': self.is_local_file,
+            'order_index': self.order_index,
+            'created_at': self.created_at.isoformat() + 'Z' if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() + 'Z' if self.updated_at else None
+        }
+
+
 class ActionLog(db.Model):
     """Action log table - stores user actions for auditing"""
     __tablename__ = 'action_logs'

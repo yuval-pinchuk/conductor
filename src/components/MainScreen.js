@@ -5,6 +5,7 @@ import Header from './Header';
 import EditableTable from './EditableTable';
 import useCollaborativeTimer from './CollaborativeTimer';
 import ProjectChat from './ProjectChat';
+import RelatedDocuments from './RelatedDocuments';
 import usePageVisibility from '../hooks/usePageVisibility';
 import { Button, Typography, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, Alert, Box, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -47,6 +48,26 @@ const deepCloneTableData = (data) => {
   }));
 };
 
+// Helper function for deep copying arrays of objects (e.g., periodic scripts)
+// More efficient than JSON.parse(JSON.stringify()) and handles all data types correctly
+const deepCloneArray = (data) => {
+  if (!Array.isArray(data)) {
+    // If not an array, return a shallow copy of the object
+    return data ? { ...data } : data;
+  }
+  return data.map(item => ({ ...item }));
+};
+
+// Helper function to patch/update a row in table data
+// Moved outside component since it doesn't depend on any state/props
+const patchRows = (data, rowId, updates) =>
+  data.map(phase => ({
+    ...phase,
+    rows: phase.rows.map(row =>
+      row.id === rowId ? { ...row, ...updates } : row
+    ),
+  }));
+
 const MainScreen = ({ project, role, name, onLogout }) => {
   const isManager = role === project.manager_role;
   const isVisible = usePageVisibility();
@@ -70,6 +91,11 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   // Periodic Scripts State
   const [periodicScripts, setPeriodicScripts] = useState([]);
   const [originalPeriodicScripts, setOriginalPeriodicScripts] = useState([]);
+  
+  // Related Documents State
+  const [relatedDocuments, setRelatedDocuments] = useState([]);
+  const [originalRelatedDocuments, setOriginalRelatedDocuments] = useState([]);
+  const [documentsDrawerOpen, setDocumentsDrawerOpen] = useState(false);
   
   // Active Logins State
   const [activeLogins, setActiveLogins] = useState([]);
@@ -120,14 +146,21 @@ const MainScreen = ({ project, role, name, onLogout }) => {
   const processNotificationRef = useRef(null);
   const periodicScriptTimeoutsRef = useRef({}); // Store timeout IDs for each periodic script
   const executePeriodicScriptRef = useRef(null); // Store latest executePeriodicScript function
-
-  const patchRows = (data, rowId, updates) =>
-    data.map(phase => ({
-      ...phase,
-      rows: phase.rows.map(row =>
-        row.id === rowId ? { ...row, ...updates } : row
-      ),
-    }));
+  
+  // Maximum number of processed message IDs to keep in memory (prevents unbounded growth)
+  const MAX_PROCESSED_MESSAGE_IDS = 1000;
+  
+  // Helper function to add message ID with size limiting
+  const addProcessedMessageId = useCallback((messageId) => {
+    const messageIds = processedMessageIdsRef.current;
+    if (messageIds.size >= MAX_PROCESSED_MESSAGE_IDS) {
+      // Remove oldest entries (first N entries when converted to array)
+      const idsArray = Array.from(messageIds);
+      const removeCount = Math.floor(MAX_PROCESSED_MESSAGE_IDS * 0.2); // Remove 20% when limit reached
+      idsArray.slice(0, removeCount).forEach(id => messageIds.delete(id));
+    }
+    messageIds.add(messageId);
+  }, []);
 
   const applyRowUpdates = (rowId, updates, { syncOriginal = true } = {}) => {
     setCurrentTableData(prev => patchRows(prev, rowId, updates));
@@ -228,7 +261,12 @@ const MainScreen = ({ project, role, name, onLogout }) => {
       // Fetch periodic scripts
       const scriptsData = await api.getPeriodicScripts(project.id);
       setPeriodicScripts(scriptsData);
-      setOriginalPeriodicScripts(JSON.parse(JSON.stringify(scriptsData)));
+      setOriginalPeriodicScripts(deepCloneArray(scriptsData));
+      
+      // Fetch related documents
+      const documentsData = await api.getRelatedDocuments(project.id);
+      setRelatedDocuments(documentsData);
+      setOriginalRelatedDocuments(deepCloneArray(documentsData));
       
       // Fetch active logins
       const loginsData = await api.getActiveLogins(project.id);
@@ -408,9 +446,54 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     try {
       if (isManager) {
         // Manager saves directly
-        await api.updateTableData(project.id, currentTableData);
-        await api.updatePeriodicScriptsBulk(project.id, periodicScripts);
+        await api.updateTableData(project.id, currentTableData, name, role);
+        await api.updatePeriodicScriptsBulk(project.id, periodicScripts, name, role);
         await api.updateProjectVersion(project.id, currentVersion);
+        
+        // Save related documents
+        // Get existing documents from backend to compare
+        const existingDocs = await api.getRelatedDocuments(project.id);
+        const existingDocIds = new Set(existingDocs.map(doc => doc.id));
+        const currentDocIds = new Set(relatedDocuments.map(doc => doc.id));
+        
+        // Delete documents that were removed
+        for (const existingDoc of existingDocs) {
+          if (!currentDocIds.has(existingDoc.id)) {
+            await api.deleteRelatedDocument(existingDoc.id, { user_role: role });
+          }
+        }
+        
+        // Create or update documents
+        for (const doc of relatedDocuments) {
+          // Check if it's a new document (temp ID starting with 'temp_' or old 'new' ID)
+          if (typeof doc.id === 'string' && (doc.id.startsWith('temp_') || doc.id === 'new')) {
+            // New document - create it
+            await api.createRelatedDocument(project.id, {
+              name: doc.name,
+              url: doc.url,
+              is_local_file: doc.is_local_file,
+              order_index: doc.order_index,
+              user_role: role,
+            });
+          } else if (existingDocIds.has(doc.id)) {
+            // Existing document - check if it changed
+            const existingDoc = existingDocs.find(d => d.id === doc.id);
+            if (existingDoc && (
+              existingDoc.name !== doc.name ||
+              existingDoc.url !== doc.url ||
+              existingDoc.is_local_file !== doc.is_local_file ||
+              existingDoc.order_index !== doc.order_index
+            )) {
+              await api.updateRelatedDocument(doc.id, {
+                name: doc.name,
+                url: doc.url,
+                is_local_file: doc.is_local_file,
+                order_index: doc.order_index,
+                user_role: role,
+              });
+            }
+          }
+        }
         
         // Update roles
         const currentRoles = await api.getProjectRoles(project.id);
@@ -425,11 +508,17 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         
         // Note: Role deletion would need a separate endpoint
         
+        // Reload related documents to get updated IDs
+        const updatedDocuments = await api.getRelatedDocuments(project.id);
+        
         // Update local state
-        const clonedData = JSON.parse(JSON.stringify(currentTableData));
-        const clonedScripts = JSON.parse(JSON.stringify(periodicScripts));
+        const clonedData = deepCloneTableData(currentTableData);
+        const clonedScripts = deepCloneArray(periodicScripts);
+        const clonedDocuments = deepCloneArray(updatedDocuments);
         setOriginalTableData(clonedData);
         setOriginalPeriodicScripts(clonedScripts);
+        setOriginalRelatedDocuments(clonedDocuments);
+        setRelatedDocuments(updatedDocuments);
         setOriginalVersion(currentVersion);
         setProjectDetails(prev => ({
           ...prev,
@@ -501,6 +590,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     // 2. Revert to the deep clone saved at the start of the session
     setCurrentTableData(originalTableData); 
     setPeriodicScripts(originalPeriodicScripts);
+    setRelatedDocuments(originalRelatedDocuments);
     setCurrentVersion(originalVersion);
     // Clear explicit operations on cancel
     explicitOperationsRef.current = { row_moves: [], row_duplicates: [] };
@@ -542,6 +632,24 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     }
   }, [isManager, project.id]);
 
+  // Refs for socket handlers to avoid recreating socket connection
+  const isEditingRef = useRef(isEditing);
+  const loadProjectDataRef = useRef(loadProjectData);
+  const fetchPendingChangesRef = useRef(fetchPendingChanges);
+
+  // Keep refs synchronized with current values
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  useEffect(() => {
+    loadProjectDataRef.current = loadProjectData;
+  }, [loadProjectData]);
+
+  useEffect(() => {
+    fetchPendingChangesRef.current = fetchPendingChanges;
+  }, [fetchPendingChanges]);
+
   // Socket.IO listener for real-time project data updates
   useEffect(() => {
     if (!project.id) return;
@@ -569,15 +677,15 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     });
 
     socket.on('phases_updated', (data) => {
-      if (data.project_id === project.id && !isEditing) {
+      if (data.project_id === project.id && !isEditingRef.current) {
         // Reload data when phases are updated (status changes, manager approvals, etc.)
-        loadProjectData(false).catch(() => {});
+        loadProjectDataRef.current(false).catch(() => {});
       }
     });
 
     socket.on('pending_changes_notification', (data) => {
       if (data.project_id === project.id && isManager && data.manager_role === role) {
-        fetchPendingChanges();
+        fetchPendingChangesRef.current();
         setReviewModalOpen(true);
       }
     });
@@ -596,7 +704,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
 
     socket.on('pending_changes_updated', (data) => {
       if (data.project_id === project.id && isManager) {
-        fetchPendingChanges();
+        fetchPendingChangesRef.current();
       }
     });
 
@@ -607,9 +715,16 @@ const MainScreen = ({ project, role, name, onLogout }) => {
     });
 
     return () => {
+      socket.off('connect');
+      socket.off('reconnect');
+      socket.off('phases_updated');
+      socket.off('pending_changes_notification');
+      socket.off('user_notification');
+      socket.off('pending_changes_updated');
+      socket.off('user_deactivated');
       socket.disconnect();
     };
-  }, [project.id, isEditing, loadProjectData, isManager, role, name, fetchPendingChanges]);
+  }, [project.id, isManager, role, name]);
 
   // Handle accepting a pending change
   const handleAcceptPendingChange = async (changeId) => {
@@ -871,6 +986,9 @@ const MainScreen = ({ project, role, name, onLogout }) => {
         onChatClose={() => {
           setChatOpen(false);
         }}
+        onDocumentsOpen={() => {
+          setDocumentsDrawerOpen(true);
+        }}
       />
       
       {dataError && (
@@ -902,6 +1020,18 @@ const MainScreen = ({ project, role, name, onLogout }) => {
           projectId={project.id}
           userName={name}
           onProcessNotification={(callback) => { processNotificationRef.current = callback; }}
+        />
+        
+        <RelatedDocuments
+          documents={relatedDocuments}
+          setDocuments={setRelatedDocuments}
+          isManager={isManager}
+          projectId={project.id}
+          userName={name}
+          userRole={role}
+          isEditing={isEditing}
+          open={documentsDrawerOpen}
+          onClose={() => setDocumentsDrawerOpen(false)}
         />
         
         <Box sx={{ mt: 2, display: 'flex', gap: 2, justifyContent: 'space-between', direction: 'ltr' }}>
@@ -1303,7 +1433,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                 onNewMessage={(messageIndex, messageId) => {
                   // Increment unread count when chat is closed, but only if we haven't processed this message ID
                   if (messageId && !processedMessageIdsRef.current.has(messageId)) {
-                    processedMessageIdsRef.current.add(messageId);
+                    addProcessedMessageId(messageId);
                     setUnreadMessageCount(prev => prev + 1);
                   } else if (!messageId) {
                     // Fallback: if no ID, still increment (for backwards compatibility)
@@ -1362,7 +1492,7 @@ const MainScreen = ({ project, role, name, onLogout }) => {
                     lastReadMessageIndexRef.current = messageIndex;
                     // Track this message as processed
                     if (messageId) {
-                      processedMessageIdsRef.current.add(messageId);
+                      addProcessedMessageId(messageId);
                     }
                   }}
                 />

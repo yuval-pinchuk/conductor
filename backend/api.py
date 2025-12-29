@@ -1,7 +1,8 @@
 # backend/api.py
 
-from flask import Blueprint, request, jsonify, current_app
-from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog
+from flask import Blueprint, request, jsonify, current_app, send_file
+import os
+from module import db, Project, Phase, Row, PeriodicScript, ProjectRole, User, PendingChange, Message, ActionLog, RelatedDocument
 from sqlalchemy import func, text
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
@@ -9,6 +10,8 @@ import json
 import uuid
 import requests
 from action_logger import ActionLogger
+from openpyxl import Workbook
+from io import BytesIO
 
 api = Blueprint('api', __name__)
 
@@ -45,9 +48,18 @@ def update_project_version(project_id):
     """Update project version"""
     project = Project.query.get_or_404(project_id)
     data = request.get_json()
-    project.version = data.get('version', project.version)
+    old_version = project.version
+    new_version = data.get('version', project.version)
+    project.version = new_version
     project.updated_at = datetime.utcnow()
     db.session.commit()
+    
+    # Log version update (only if user is manager and version actually changed)
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project.manager_role == user_role and old_version != new_version:
+        ActionLogger.log_version_update(project.id, user_name, user_role, old_version, new_version, project.reset_epoch)
+    
     return jsonify(project.to_dict()), 200
 
 
@@ -205,6 +217,52 @@ def verify_manager_password(project_id):
     return jsonify({'success': False, 'locked': True}), 401
 
 
+@api.route('/api/projects/<int:project_id>/export-excel', methods=['GET'])
+def export_project_excel(project_id):
+    """Export project rows to Excel file matching import format"""
+    project = Project.query.get_or_404(project_id)
+    
+    # Get all phases with rows, ordered by phase number
+    phases = Phase.query.options(joinedload(Phase.rows)).filter_by(project_id=project_id).order_by(Phase.phase_number).all()
+    
+    # Create workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Project Data"
+    
+    # Add header row
+    headers = ['Phase', 'Role', 'Time', 'Duration', 'Description']
+    ws.append(headers)
+    
+    # Add data rows (ordered by phase number, then by row order)
+    for phase in phases:
+        # Order rows by created_at (original order) or updated_at
+        rows = sorted(phase.rows, key=lambda r: (r.created_at or datetime.min, r.id))
+        for row in rows:
+            ws.append([
+                phase.phase_number,
+                row.role,
+                row.time,
+                row.duration,
+                row.description
+            ])
+    
+    # Create BytesIO buffer and save workbook to it
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    # Generate filename with project name and timestamp
+    filename = f"{project.name.replace(' ', '_')}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename
+    )
+
+
 @api.route('/api/projects/<int:project_id>', methods=['DELETE'])
 def delete_project(project_id):
     """Delete an entire project"""
@@ -241,6 +299,13 @@ def create_phase(project_id):
     )
     db.session.add(phase)
     db.session.commit()
+    
+    # Log phase creation (only if user is manager)
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project.manager_role == user_role:
+        ActionLogger.log_phase_add(project.id, user_name, user_role, phase.id, phase_number, project.reset_epoch)
+    
     return jsonify(phase.to_dict()), 201
 
 
@@ -248,6 +313,16 @@ def create_phase(project_id):
 def delete_phase(phase_id):
     """Delete a phase"""
     phase = Phase.query.get_or_404(phase_id)
+    project = phase.project
+    phase_number = phase.phase_number
+    
+    # Log phase deletion (only if user is manager)
+    data = request.get_json() or {}
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project and project.manager_role == user_role:
+        ActionLogger.log_phase_delete(project.id, user_name, user_role, phase_id, phase_number, project.reset_epoch)
+    
     db.session.delete(phase)
     db.session.commit()
     return jsonify({'message': 'Phase deleted'}), 200
@@ -310,6 +385,32 @@ def create_row(phase_id):
     )
     db.session.add(row)
     db.session.commit()
+    
+    # Log row creation (only if user is manager)
+    project = phase.project
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project and project.manager_role == user_role:
+        row_data = {
+            'role': row.role,
+            'time': row.time,
+            'duration': row.duration,
+            'description': row.description or '',
+            'script': row.script or ''
+        }
+        # Calculate row position (1-based) by counting all rows before this one
+        row_position_at_action = 1
+        phases = Phase.query.filter_by(project_id=project.id).order_by(Phase.phase_number).all()
+        for p in phases:
+            if p.phase_number < phase.phase_number:
+                row_position_at_action += Row.query.filter_by(phase_id=p.id).count()
+            elif p.id == phase.id:
+                # Count rows before this one in the same phase
+                rows_before = Row.query.filter_by(phase_id=phase.id).filter(Row.id < row.id).count()
+                row_position_at_action += rows_before
+                break
+        ActionLogger.log_row_add(project.id, user_name, user_role, row.id, phase.phase_number, project.reset_epoch, row_data=row_data, row_position_at_action=row_position_at_action)
+    
     return jsonify(row.to_dict()), 201
 
 
@@ -409,6 +510,24 @@ def update_row(row_id):
         row.script_result = data.get('scriptResult', row.script_result)
         row.updated_at = datetime.utcnow()
         db.session.commit()
+        
+        # Log row edit if any non-status field changed (only if user is manager)
+        if role_changed or time_changed or duration_changed or description_changed or script_changed:
+            user_name = data.get('user_name', 'Unknown')
+            user_role = data.get('user_role', 'Unknown')
+            project = row.phase.project
+            if project and project.manager_role == user_role:
+                # Log each changed field as a separate entry
+                if role_changed:
+                    ActionLogger.log_row_edit(project.id, user_name, user_role, row_id, row.phase.phase_number, {'role': row.role}, {'role': data.get('role', row.role)}, project.reset_epoch)
+                if time_changed:
+                    ActionLogger.log_row_edit(project.id, user_name, user_role, row_id, row.phase.phase_number, {'time': row.time}, {'time': data.get('time', row.time)}, project.reset_epoch)
+                if duration_changed:
+                    ActionLogger.log_row_edit(project.id, user_name, user_role, row_id, row.phase.phase_number, {'duration': row.duration}, {'duration': data.get('duration', row.duration)}, project.reset_epoch)
+                if description_changed:
+                    ActionLogger.log_row_edit(project.id, user_name, user_role, row_id, row.phase.phase_number, {'description': row.description}, {'description': data.get('description', row.description)}, project.reset_epoch)
+                if script_changed:
+                    ActionLogger.log_row_edit(project.id, user_name, user_role, row_id, row.phase.phase_number, {'script': row.script}, {'script': data.get('script', row.script)}, project.reset_epoch)
     
     # Log status change if status actually changed
     if old_status != new_status:
@@ -430,6 +549,35 @@ def update_row(row_id):
 def delete_row(row_id):
     """Delete a row"""
     row = Row.query.get_or_404(row_id)
+    phase = row.phase
+    project = phase.project
+    phase_number = phase.phase_number
+    
+    # Log row deletion (only if user is manager)
+    data = request.get_json() or {}
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project and project.manager_role == user_role:
+        row_data = {
+            'role': row.role,
+            'time': row.time,
+            'duration': row.duration,
+            'description': row.description or '',
+            'script': row.script or ''
+        }
+        # Calculate row position (1-based) by counting all rows before this one
+        row_position_at_action = 1
+        phases = Phase.query.filter_by(project_id=project.id).order_by(Phase.phase_number).all()
+        for p in phases:
+            if p.phase_number < phase_number:
+                row_position_at_action += Row.query.filter_by(phase_id=p.id).count()
+            elif p.id == phase.id:
+                # Count rows before this one in the same phase
+                rows_before = Row.query.filter_by(phase_id=phase.id).filter(Row.id < row_id).count()
+                row_position_at_action += rows_before
+                break
+        ActionLogger.log_row_delete(project.id, user_name, user_role, row_id, phase_number, project.reset_epoch, row_data=row_data, row_position_at_action=row_position_at_action)
+    
     db.session.delete(row)
     db.session.commit()
     return jsonify({'message': 'Row deleted'}), 200
@@ -495,6 +643,13 @@ def create_periodic_script(project_id):
     )
     db.session.add(script)
     db.session.commit()
+    
+    # Log script creation (only if user is manager)
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project.manager_role == user_role:
+        ActionLogger.log_script_add(project.id, user_name, user_role, script.id, script.name, project.reset_epoch)
+    
     return jsonify(script.to_dict()), 201
 
 
@@ -510,6 +665,14 @@ def update_periodic_script(script_id):
     script.updated_at = datetime.utcnow()
     
     db.session.commit()
+    
+    # Log script update (only if user is manager)
+    project = Project.query.get(script.project_id)
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project and project.manager_role == user_role:
+        ActionLogger.log_script_update(project.id, user_name, user_role, script_id, script.name, project.reset_epoch)
+    
     return jsonify(script.to_dict()), 200
 
 
@@ -517,9 +680,167 @@ def update_periodic_script(script_id):
 def delete_periodic_script(script_id):
     """Delete a periodic script"""
     script = PeriodicScript.query.get_or_404(script_id)
+    project = Project.query.get(script.project_id)
+    script_name = script.name
+    
+    # Log script deletion (only if user is manager)
+    data = request.get_json() or {}
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project and project.manager_role == user_role:
+        ActionLogger.log_script_delete(project.id, user_name, user_role, script_id, script_name, project.reset_epoch)
+    
     db.session.delete(script)
     db.session.commit()
     return jsonify({'message': 'Script deleted'}), 200
+
+
+# ==================== RELATED DOCUMENTS ENDPOINTS ====================
+
+@api.route('/api/projects/<int:project_id>/related-documents', methods=['GET'])
+def get_related_documents(project_id):
+    """Get all related documents for a project"""
+    project = Project.query.get_or_404(project_id)
+    documents = RelatedDocument.query.filter_by(project_id=project_id).order_by(RelatedDocument.order_index, RelatedDocument.id).all()
+    return jsonify([doc.to_dict() for doc in documents]), 200
+
+
+@api.route('/api/projects/<int:project_id>/related-documents', methods=['POST'])
+def create_related_document(project_id):
+    """Create a new related document (manager only)"""
+    project = Project.query.get_or_404(project_id)
+    data = request.get_json()
+    
+    # Check if user is manager
+    user_role = data.get('user_role', '')
+    if project.manager_role != user_role:
+        return jsonify({'error': 'Only managers can create related documents'}), 403
+    
+    name = data.get('name', '').strip()
+    url = data.get('url', '').strip()
+    is_local_file = data.get('is_local_file', False)
+    order_index = data.get('order_index', 0)
+    
+    if not name:
+        return jsonify({'error': 'Name is required'}), 400
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+    
+    # Get max order_index if not provided
+    if order_index == 0:
+        max_order = db.session.query(func.max(RelatedDocument.order_index)).filter_by(project_id=project_id).scalar()
+        order_index = (max_order or 0) + 1
+    
+    document = RelatedDocument(
+        project_id=project_id,
+        name=name,
+        url=url,
+        is_local_file=bool(is_local_file),
+        order_index=order_index
+    )
+    db.session.add(document)
+    db.session.commit()
+    
+    return jsonify(document.to_dict()), 201
+
+
+@api.route('/api/related-documents/<int:doc_id>', methods=['PUT'])
+def update_related_document(doc_id):
+    """Update a related document (manager only)"""
+    document = RelatedDocument.query.get_or_404(doc_id)
+    project = Project.query.get(document.project_id)
+    data = request.get_json()
+    
+    # Check if user is manager
+    user_role = data.get('user_role', '')
+    if project.manager_role != user_role:
+        return jsonify({'error': 'Only managers can update related documents'}), 403
+    
+    if 'name' in data:
+        document.name = data['name'].strip()
+    if 'url' in data:
+        document.url = data['url'].strip()
+    if 'is_local_file' in data:
+        document.is_local_file = bool(data['is_local_file'])
+    if 'order_index' in data:
+        document.order_index = int(data['order_index'])
+    
+    document.updated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify(document.to_dict()), 200
+
+
+@api.route('/api/related-documents/<int:doc_id>', methods=['DELETE'])
+def delete_related_document(doc_id):
+    """Delete a related document (manager only)"""
+    document = RelatedDocument.query.get_or_404(doc_id)
+    project = Project.query.get(document.project_id)
+    data = request.get_json() or {}
+    
+    # Check if user is manager
+    user_role = data.get('user_role', '')
+    if project.manager_role != user_role:
+        return jsonify({'error': 'Only managers can delete related documents'}), 403
+    
+    db.session.delete(document)
+    db.session.commit()
+    return jsonify({'message': 'Document deleted'}), 200
+
+
+@api.route('/api/files/<path:file_path>', methods=['GET'])
+def serve_file(file_path):
+    """Serve local files securely with path validation"""
+    # Normalize the path to prevent directory traversal
+    # Remove any '..' or absolute path attempts
+    normalized_path = os.path.normpath(file_path)
+    
+    # Prevent directory traversal attacks
+    if '..' in normalized_path or normalized_path.startswith('/'):
+        return jsonify({'error': 'Invalid file path'}), 400
+    
+    # Get the base directory for files (can be configured in config.py)
+    # Default to a 'files' directory in the backend folder
+    base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'files')
+    
+    # Ensure the base directory exists
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir, exist_ok=True)
+    
+    # Construct the full file path
+    full_path = os.path.join(base_dir, normalized_path)
+    
+    # Ensure the resolved path is within the base directory
+    real_base = os.path.realpath(base_dir)
+    real_file = os.path.realpath(full_path)
+    
+    if not real_file.startswith(real_base):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Check if file exists
+    if not os.path.exists(real_file) or not os.path.isfile(real_file):
+        return jsonify({'error': 'File not found'}), 404
+    
+    # Determine MIME type based on file extension
+    _, ext = os.path.splitext(real_file)
+    mime_types = {
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.html': 'text/html',
+        '.htm': 'text/html',
+    }
+    
+    mimetype = mime_types.get(ext.lower(), 'application/octet-stream')
+    
+    return send_file(real_file, mimetype=mimetype)
 
 
 @api.route('/api/periodic-scripts/<int:script_id>/execute', methods=['POST'])
@@ -614,6 +935,13 @@ def add_project_role(project_id):
     project_role = ProjectRole(project_id=project_id, role_name=role_name)
     db.session.add(project_role)
     db.session.commit()
+    
+    # Log role addition (only if user is manager)
+    user_name = data.get('user_name', 'Unknown')
+    user_role = data.get('user_role', 'Unknown')
+    if project.manager_role == user_role:
+        ActionLogger.log_role_add(project.id, user_name, user_role, role_name, project.reset_epoch)
+    
     return jsonify(project_role.to_dict()), 201
 
 
@@ -623,23 +951,94 @@ def add_project_role(project_id):
 def update_table_data(project_id):
     """Bulk update table data (phases and rows)"""
     project = Project.query.get_or_404(project_id)
-    data = request.get_json()  # Array of phases with rows
+    request_data = request.get_json()  # Can be array (legacy) or dict with phases, user_name, user_role
+    
+    # Extract user info from request JSON if it's a dict wrapper, otherwise use defaults
+    if isinstance(request_data, dict) and 'phases' in request_data:
+        # New format: wrapped in a dict with user info
+        user_name = request_data.get('user_name', 'Unknown')
+        user_role = request_data.get('user_role', project.manager_role)
+        data = request_data.get('phases', [])
+    elif isinstance(request_data, list):
+        # Legacy format: direct array (backward compatibility)
+        data = request_data
+        user_name = 'Unknown'
+        user_role = project.manager_role
+    else:
+        # Invalid format
+        return jsonify({'error': 'Invalid request format'}), 400
+    
+    should_log = True  # Always log bulk updates since only managers can perform them
     
     try:
+        # Get old data before deletion for comparison
+        old_phases_data = {}
+        if should_log:
+            old_phases = Phase.query.options(joinedload(Phase.rows)).filter_by(project_id=project_id).order_by(Phase.phase_number).all()
+            for old_phase in old_phases:
+                old_phases_data[old_phase.phase_number] = {
+                    'phase_id': old_phase.id,
+                    'is_active': old_phase.is_active,
+                    'rows': [{
+                        'id': row.id,
+                        'role': row.role,
+                        'time': row.time,
+                        'duration': row.duration,
+                        'description': row.description,
+                        'script': row.script,
+                        'status': row.status,
+                        'index': idx
+                    } for idx, row in enumerate(old_phase.rows)]
+                }
+        
+        # Build new data structure for comparison
+        new_phases_data = {}
+        for phase_data in data:
+            phase_num = phase_data['phase']
+            rows_list = []
+            for idx, row_data in enumerate(phase_data.get('rows', [])):
+                rows_list.append({
+                    'id': row_data.get('id'),  # Include row ID to detect moves
+                    'role': row_data.get('role', ''),
+                    'time': row_data.get('time', '00:00:00'),
+                    'duration': row_data.get('duration', '00:00'),
+                    'description': row_data.get('description', ''),
+                    'script': row_data.get('script', ''),
+                    'status': row_data.get('status', 'N/A'),
+                    'index': idx
+                })
+            new_phases_data[phase_num] = {
+                'is_active': phase_data.get('is_active', False),
+                'rows': rows_list
+            }
+        
+        # Log phase deletions
+        if should_log:
+            deleted_phases = set(old_phases_data.keys()) - set(new_phases_data.keys())
+            for phase_num in deleted_phases:
+                old_phase_data = old_phases_data[phase_num]
+                ActionLogger.log_phase_delete(project.id, user_name, user_role, old_phase_data['phase_id'], phase_num, project.reset_epoch)
+        
         # Clear existing phases and rows
         Phase.query.filter_by(project_id=project_id).delete()
         
+        # Track created phases and rows for logging
+        created_phases = {}
+        created_rows = {}
+        
         # Recreate phases and rows
         for phase_data in data:
+            phase_num = phase_data['phase']
             phase = Phase(
                 project_id=project_id,
-                phase_number=phase_data['phase'],
+                phase_number=phase_num,
                 is_active=phase_data.get('is_active', False)
             )
             db.session.add(phase)
             db.session.flush()  # Get phase.id
+            created_phases[phase_num] = phase
             
-            for row_data in phase_data.get('rows', []):
+            for idx, row_data in enumerate(phase_data.get('rows', [])):
                 row = Row(
                     phase_id=phase.id,
                     role=row_data.get('role', ''),
@@ -651,8 +1050,480 @@ def update_table_data(project_id):
                     script_result=row_data.get('scriptResult')
                 )
                 db.session.add(row)
+                db.session.flush()  # Get row.id
+                if phase_num not in created_rows:
+                    created_rows[phase_num] = []
+                created_rows[phase_num].append((row.id, idx))
         
         db.session.commit()
+        
+        # Log phase additions
+        if should_log:
+            added_phases = set(new_phases_data.keys()) - set(old_phases_data.keys())
+            for phase_num in added_phases:
+                phase = created_phases[phase_num]
+                ActionLogger.log_phase_add(project.id, user_name, user_role, phase.id, phase_num, project.reset_epoch)
+        
+        # Compare and log row changes
+        if should_log:
+            # Detect row moves by matching rows by content (since IDs change on recreation)
+            # Build maps: row_signature -> (phase_num, index, row_id) for both old and new
+            # Row signature is based on content fields: role, time, duration, description, script
+            old_rows_by_signature = {}  # {signature: (phase_num, index, row_id)}
+            new_rows_by_signature = {}  # {signature: (phase_num, index, row_id)}
+            old_rows_by_id = {}  # {row_id: (phase_num, index)} - for reference
+            new_rows_by_id = {}  # {row_id: (phase_num, index)} - from request
+            
+            def get_row_signature(row):
+                """Create a signature based on row content"""
+                return (
+                    row.get('role', ''),
+                    row.get('time', ''),
+                    row.get('duration', ''),
+                    row.get('description', ''),
+                    row.get('script', '')
+                )
+            
+            for phase_num, phase_data in old_phases_data.items():
+                for idx, row in enumerate(phase_data['rows']):
+                    signature = get_row_signature(row)
+                    old_rows_by_signature[signature] = (phase_num, idx, row['id'])
+                    old_rows_by_id[row['id']] = (phase_num, idx)
+            
+            # Build new_rows_by_signature as a list to handle duplicates (same signature, different IDs)
+            new_rows_by_signature_list = {}  # {signature: [(phase_num, idx, row_id), ...]}
+            for phase_num, phase_data in new_phases_data.items():
+                for idx, row in enumerate(phase_data['rows']):
+                    signature = get_row_signature(row)
+                    row_id = row.get('id')
+                    if signature not in new_rows_by_signature_list:
+                        new_rows_by_signature_list[signature] = []
+                    new_rows_by_signature_list[signature].append((phase_num, idx, row_id))
+                    if row_id:
+                        new_rows_by_id[row_id] = (phase_num, idx)
+            
+            # For backward compatibility, also build the dict (using first occurrence)
+            new_rows_by_signature = {}
+            for signature, rows_list in new_rows_by_signature_list.items():
+                new_rows_by_signature[signature] = rows_list[0]  # Use first occurrence
+            
+            # Detect moves by matching signatures: same content but different position
+            # IMPORTANT: Only match if the old_row_id actually exists in new data (by ID mapping)
+            # If old_row_id doesn't exist in new_rows_by_id, the row was deleted, not moved
+            potential_moves = []  # List of (old_row_id, new_row_id, old_phase, new_phase, old_idx, new_idx, index_change)
+            moved_row_ids = set()
+            
+            # IMPORTANT: Detect duplicates FIRST, before move detection
+            # Track new row IDs that are duplicates (same signature as old row, but different ID)
+            # These should be logged as adds, not moves
+            duplicate_new_row_ids = set()
+            for signature, new_rows_list in new_rows_by_signature_list.items():
+                if signature in old_rows_by_signature:
+                    # This signature exists in old data - check if any new rows are duplicates
+                    old_row_id = old_rows_by_signature[signature][2]  # Get old row ID
+                    # Check all new rows with this signature
+                    for new_phase, new_idx, new_row_id in new_rows_list:
+                        # A duplicate is a new row that:
+                        # 1. Has the same signature as an old row
+                        # 2. Has a different ID than the old row
+                        # 3. The new ID doesn't exist in old_rows_by_id (it's a temporary ID)
+                        # Note: We don't require the old row to still exist - duplicates can be created even if the original was deleted
+                        is_different_id = new_row_id != old_row_id
+                        is_temporary_id = new_row_id not in old_rows_by_id
+                        if is_different_id and is_temporary_id:
+                            # This is a duplicate: same content as old row, but different (temporary) ID
+                            duplicate_new_row_ids.add(new_row_id)
+                else:
+                    # Signature doesn't exist in old data - check if any new rows with this signature are temporary IDs
+                    # These might be duplicates of rows that were deleted, or truly new rows
+                    for new_phase, new_idx, new_row_id in new_rows_list:
+                        if new_row_id and new_row_id not in old_rows_by_id:
+                            # Check if this temporary ID matches any old row by content (even if signature doesn't match exactly)
+                            # This handles the case where a duplicate was created but the original row was deleted
+                            pass
+            
+            # Track which old row IDs have been matched to their new counterparts
+            matched_old_row_ids = set()
+            # Track deleted row indices per phase to identify cascading shifts
+            deleted_row_indices_by_phase = {}  # {phase_num: set of old_idx}
+            
+            for signature, (old_phase, old_idx, old_row_id) in old_rows_by_signature.items():
+                if signature in new_rows_by_signature_list:
+                    # There may be multiple new rows with this signature (duplicates)
+                    new_rows_with_signature = new_rows_by_signature_list[signature]
+                    
+                    # Try to match the old row to a new row by ID first
+                    # Skip duplicates - they should not be matched to old rows
+                    matched = False
+                    for new_phase, new_idx, new_row_id in new_rows_with_signature:
+                        # Skip if this is a duplicate - don't match duplicates to old rows
+                        if new_row_id in duplicate_new_row_ids:
+                            continue
+                        
+                        if old_row_id == new_row_id:
+                            # Same row - check if it moved
+                            # But skip if this new_row_id is a duplicate (shouldn't happen, but be safe)
+                            if new_row_id in duplicate_new_row_ids:
+                                continue
+                            matched = True
+                            matched_old_row_ids.add(old_row_id)
+                            if old_phase != new_phase or old_idx != new_idx:
+                                # Row moved - add to potential moves
+                                # But first check if new_row_id is a duplicate
+                                if new_row_id in duplicate_new_row_ids:
+                                    break  # Don't add duplicate to potential_moves
+                                
+                                # Only log moves that are NOT cascading shifts from deletions
+                                # A cascading shift: same phase, index decreased by exactly 1, and there's a deleted row before this position
+                                # For now, we'll filter these out later when we know which rows were deleted
+                                index_change = abs(new_idx - old_idx)
+                                potential_moves.append((old_row_id, new_row_id, old_phase, new_phase, old_idx, new_idx, index_change))
+                                moved_row_ids.add(old_row_id)
+                            break
+                    
+                    # If no match by ID, the old row was deleted (or there's a duplicate)
+                    # Track it as potentially deleted (will be confirmed later)
+                    if not matched and old_row_id not in new_rows_by_id:
+                        # This old row was deleted - track its index for cascading shift detection
+                        if old_phase not in deleted_row_indices_by_phase:
+                            deleted_row_indices_by_phase[old_phase] = set()
+                        deleted_row_indices_by_phase[old_phase].add(old_idx)
+                    
+                    if not matched:
+                        pass
+                else:
+                    # Signature doesn't exist in new data - this row was completely deleted
+                    # Track it as deleted for cascading shift detection
+                    if old_row_id not in new_rows_by_id:
+                        if old_phase not in deleted_row_indices_by_phase:
+                            deleted_row_indices_by_phase[old_phase] = set()
+                        deleted_row_indices_by_phase[old_phase].add(old_idx)
+            
+            # Filter to only log explicit moves, not cascading position changes
+            # Strategy: 
+            # 1. Cross-phase moves are always explicit - log them all
+            # 2. Same-phase moves: Log the move with the largest index change (the explicitly dragged row)
+            #    Cascading rows have smaller index changes (usually 1 position)
+            moves_to_log = []
+            if potential_moves:
+                # Group moves by phase
+                moves_by_phase = {}
+                for move in potential_moves:
+                    old_row_id, new_row_id_request, old_phase, new_phase, old_idx, new_idx, index_change = move
+                    if old_phase != new_phase:
+                        # Cross-phase move - always explicit, log it
+                        moves_to_log.append(move)
+                    else:
+                        # Same-phase move - group by phase
+                        if old_phase not in moves_by_phase:
+                            moves_by_phase[old_phase] = []
+                        moves_by_phase[old_phase].append(move)
+                
+                # For each phase, log only the move with maximum index change (the explicitly dragged row)
+                # When multiple rows shift by 1 position (cascading shifts from deletions), don't log any of them
+                for phase_num, phase_moves in moves_by_phase.items():
+                    if phase_moves:
+                        # Find the move with the largest index change (the explicitly dragged row)
+                        max_change_move = max(phase_moves, key=lambda m: m[6])  # index_change is at index 6
+                        
+                        # Check if this is a cascading shift from a deletion
+                        # A cascading shift: same phase, shifted left (old_idx > new_idx), exactly 1 position (new_idx == old_idx - 1),
+                        # and there's a deleted row at old_idx - 1 (the position right before the shifted row's old position)
+                        old_row_id, new_row_id_request, old_phase, new_phase, old_idx, new_idx, index_change = max_change_move
+                        is_cascading_shift = False
+                        if (old_phase == new_phase and old_idx > new_idx and new_idx == old_idx - 1):
+                            # Check if there's a deleted row at the position right before this row's old position
+                            # If row at old_idx shifted to new_idx = old_idx - 1, then the row at old_idx - 1 was deleted
+                            deleted_before_idx = old_idx - 1
+                            if (phase_num in deleted_row_indices_by_phase and 
+                                deleted_before_idx in deleted_row_indices_by_phase[phase_num]):
+                                is_cascading_shift = True
+                            else:
+                                # Also check if the old_row_id at deleted_before_idx doesn't exist in new_rows_by_id
+                                # (it might not have been tracked if its signature didn't match any new row)
+                                if phase_num in old_phases_data and deleted_before_idx < len(old_phases_data[phase_num]['rows']):
+                                    deleted_row_at_idx = old_phases_data[phase_num]['rows'][deleted_before_idx]
+                                    deleted_row_id_at_idx = deleted_row_at_idx.get('id') if deleted_row_at_idx else None
+                                    if deleted_row_id_at_idx and deleted_row_id_at_idx not in new_rows_by_id:
+                                        is_cascading_shift = True
+                        
+                        # If there are multiple moves and they all have index_change of 1, they're cascading shifts from deletions
+                        # Also check if the single move is a cascading shift
+                        should_skip = (len(phase_moves) > 1 and all(m[6] == 1 for m in phase_moves)) or is_cascading_shift
+                        if should_skip:
+                            # All moves have index_change of 1 OR this is a cascading shift from deletion - don't log
+                            pass
+                        else:
+                            # Log the move with maximum index change (or the only move if there's just one)
+                            moves_to_log.append(max_change_move)
+            
+            # Log the filtered moves (but exclude duplicates)
+            for move in moves_to_log:
+                old_row_id, new_row_id_request, old_phase, new_phase, old_idx, new_idx, index_change = move
+                # Skip if this is a duplicate - duplicates should be logged as adds, not moves
+                if new_row_id_request in duplicate_new_row_ids:
+                    continue
+                
+                # Also skip if new_row_id_request is a temporary ID (timestamp-like) and not in old_rows_by_id
+                # This catches duplicates that weren't detected by signature matching
+                if new_row_id_request and new_row_id_request not in old_rows_by_id:
+                    # Check if it looks like a temporary ID (timestamp)
+                    # Temporary IDs from frontend are timestamps (milliseconds since epoch, > 1e12)
+                    # Also check if it's a string that can be converted to a number > 1e12
+                    is_timestamp_id = False
+                    if isinstance(new_row_id_request, (int, float)):
+                        is_timestamp_id = new_row_id_request > 1000000000000  # Timestamps are > 1e12
+                    elif isinstance(new_row_id_request, str):
+                        try:
+                            num_val = int(new_row_id_request)
+                            is_timestamp_id = num_val > 1000000000000
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    if is_timestamp_id:
+                        continue
+                
+                # Map to new row ID after recreation (use the position in created_rows)
+                if new_phase in created_rows and new_idx < len(created_rows[new_phase]):
+                    new_row_id_db, _ = created_rows[new_phase][new_idx]
+                    # Calculate the row's position at the time of move (1-based) for display
+                    # We need to count all rows before this row in the old state to get its global position
+                    row_position_at_move = 1  # Start at 1
+                    for p_num in sorted(old_phases_data.keys()):
+                        if p_num < old_phase:
+                            row_position_at_move += len(old_phases_data[p_num]['rows'])
+                        elif p_num == old_phase:
+                            row_position_at_move += old_idx
+                            break
+                    
+                    # Log move with index information using the new database row ID
+                    # Store row_position_at_move so PDF can display correct row number even after rows are recreated
+                    ActionLogger.log_row_move(project.id, user_name, user_role, new_row_id_db, old_phase, new_phase, old_index=old_idx, new_index=new_idx, row_position_at_move=row_position_at_move, reset_epoch=project.reset_epoch)
+            
+            # Now process adds, deletes, and edits (excluding moved rows)
+            for phase_num in old_phases_data.keys():
+                if phase_num not in new_phases_data:
+                    # All rows in this phase were deleted
+                    for old_idx, old_row in enumerate(old_phases_data[phase_num]['rows']):
+                        if old_row['id'] not in moved_row_ids:
+                            # Calculate row position at action time (1-based) from old state
+                            row_position_at_action = 1
+                            for p_num in sorted(old_phases_data.keys()):
+                                if p_num < phase_num:
+                                    row_position_at_action += len(old_phases_data[p_num]['rows'])
+                                elif p_num == phase_num:
+                                    row_position_at_action += old_idx
+                                    break
+                            ActionLogger.log_row_delete(project.id, user_name, user_role, old_row['id'], phase_num, project.reset_epoch, row_data=old_row, row_position_at_action=row_position_at_action)
+                else:
+                    old_rows = old_phases_data[phase_num]['rows']
+                    new_rows = new_phases_data[phase_num]['rows']
+                    created_rows_list = created_rows.get(phase_num, [])
+                    created_idx = 0
+                    
+                    # Build sets of IDs at each index for comparison
+                    old_rows_at_idx = {idx: row['id'] for idx, row in enumerate(old_rows) if row.get('id')}
+                    new_rows_at_idx = {idx: row.get('id') for idx, row in enumerate(new_rows) if row.get('id')}
+                    
+                    max_len = max(len(old_rows), len(new_rows))
+                    for idx in range(max_len):
+                        old_row_id = old_rows_at_idx.get(idx)
+                        new_row_id = new_rows_at_idx.get(idx)
+                        
+                        if idx >= len(old_rows):
+                            # New row (no old row at this position)
+                            if created_idx < len(created_rows_list):
+                                created_row_id, _ = created_rows_list[created_idx]
+                                # Check if this is actually a moved row (by content matching) or truly new
+                                # Also check if new_row_id exists in old_rows_by_id - if it does, it's a duplicate, not a new row
+                                # Duplicate rows (same signature, different ID) should be logged as adds
+                                # Temporary IDs (timestamps) are always new rows, never moves
+                                in_moved = new_row_id in moved_row_ids if new_row_id else False
+                                in_old = new_row_id in old_rows_by_id if new_row_id else False
+                                is_duplicate = new_row_id in duplicate_new_row_ids if new_row_id else False
+                                
+                                # Check if it's a temporary ID (timestamp) - these are always new rows
+                                is_temporary_id_for_add = False
+                                if new_row_id and new_row_id not in old_rows_by_id:
+                                    if isinstance(new_row_id, (int, float)):
+                                        is_temporary_id_for_add = new_row_id > 1000000000000  # Timestamps are > 1e12
+                                    elif isinstance(new_row_id, str):
+                                        try:
+                                            num_val = int(new_row_id)
+                                            is_temporary_id_for_add = num_val > 1000000000000
+                                        except (ValueError, TypeError):
+                                            pass
+                                
+                                is_truly_new = new_row_id and not in_moved and (not in_old or is_duplicate or is_temporary_id_for_add)
+                                if is_truly_new:
+                                    # Get row data from new_rows for logging
+                                    new_row_data = new_rows[idx] if idx < len(new_rows) else None
+                                    # Calculate row position at action time (1-based)
+                                    row_position_at_action = 1
+                                    for p_num in sorted(new_phases_data.keys()):
+                                        if p_num < phase_num:
+                                            row_position_at_action += len(new_phases_data[p_num]['rows'])
+                                        elif p_num == phase_num:
+                                            row_position_at_action += idx
+                                            break
+                                    ActionLogger.log_row_add(project.id, user_name, user_role, created_row_id, phase_num, project.reset_epoch, row_data=new_row_data, row_position_at_action=row_position_at_action)
+                                created_idx += 1
+                        elif idx >= len(new_rows):
+                            # Deleted row (no new row at this position)
+                            if old_row_id and old_row_id not in moved_row_ids:
+                                # Calculate row position at action time (1-based) from old state
+                                row_position_at_action = 1
+                                for p_num in sorted(old_phases_data.keys()):
+                                    if p_num < phase_num:
+                                        row_position_at_action += len(old_phases_data[p_num]['rows'])
+                                    elif p_num == phase_num:
+                                        row_position_at_action += idx
+                                        break
+                                ActionLogger.log_row_delete(project.id, user_name, user_role, old_row_id, phase_num, project.reset_epoch, row_data=old_row, row_position_at_action=row_position_at_action)
+                        else:
+                            # Both positions exist
+                            old_row = old_rows[idx]
+                            new_row = new_rows[idx]
+                            
+                            old_row_id = old_row.get('id')
+                            new_row_id = new_row.get('id')
+                            
+                            # Check if new_row_id is a temporary ID (timestamp) - these are always new rows
+                            is_new_row_temporary_id = False
+                            if new_row_id and new_row_id not in old_rows_by_id:
+                                if isinstance(new_row_id, (int, float)):
+                                    is_new_row_temporary_id = new_row_id > 1000000000000  # Timestamps are > 1e12
+                                elif isinstance(new_row_id, str):
+                                    try:
+                                        num_val = int(new_row_id)
+                                        is_new_row_temporary_id = num_val > 1000000000000
+                                    except (ValueError, TypeError):
+                                        pass
+                            
+                            # Skip if this row was already logged as moved, BUT only if the new row is NOT a temporary ID
+                            # If the new row is a temporary ID, it's a new row at this position (not the moved old row)
+                            if old_row_id in moved_row_ids and not is_new_row_temporary_id:
+                                created_idx += 1
+                                continue
+                            
+                            # IMPORTANT: Match rows by signature/content first, not just by ID
+                            # After database recreation, IDs change, so we need to check if it's the same row by content
+                            old_signature = get_row_signature(old_row)
+                            new_signature = get_row_signature(new_row)
+                            same_content = old_signature == new_signature
+                            
+                            # If same content, it's the same row (possibly recreated with new ID) - check for edits
+                            if same_content:
+                                # Same row - check for content changes (shouldn't happen if signature matches, but check anyway)
+                                if (old_row['role'] != new_row['role'] or
+                                    old_row['time'] != new_row['time'] or
+                                    old_row['duration'] != new_row['duration'] or
+                                    old_row['description'] != new_row['description'] or
+                                    old_row['script'] != new_row['script']):
+                                    # Row was edited - log each field change separately
+                                    if created_idx < len(created_rows_list):
+                                        new_row_id_log, _ = created_rows_list[created_idx]
+                                        # Log each changed field as a separate entry
+                                        if old_row['role'] != new_row['role']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'role': old_row['role']}, {'role': new_row['role']}, project.reset_epoch)
+                                        if old_row['time'] != new_row['time']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'time': old_row['time']}, {'time': new_row['time']}, project.reset_epoch)
+                                        if old_row['duration'] != new_row['duration']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'duration': old_row['duration']}, {'duration': new_row['duration']}, project.reset_epoch)
+                                        if old_row['description'] != new_row['description']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'description': old_row['description']}, {'description': new_row['description']}, project.reset_epoch)
+                                        if old_row['script'] != new_row['script']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'script': old_row['script']}, {'script': new_row['script']}, project.reset_epoch)
+                                # Increment created_idx since this position exists in new data
+                                created_idx += 1
+                                continue
+                            
+                            # Different content - check if old row was deleted and new row was added
+                            if old_row_id and new_row_id and old_row_id != new_row_id:
+                                # Check if old row still exists elsewhere (by ID) - if so, it moved, not deleted
+                                if old_row_id not in new_rows_by_id:
+                                    # Old row was deleted - log it
+                                    row_position_at_action = 1
+                                    for p_num in sorted(old_phases_data.keys()):
+                                        if p_num < phase_num:
+                                            row_position_at_action += len(old_phases_data[p_num]['rows'])
+                                        elif p_num == phase_num:
+                                            row_position_at_action += idx
+                                            break
+                                    ActionLogger.log_row_delete(project.id, user_name, user_role, old_row_id, phase_num, project.reset_epoch, row_data=old_row, row_position_at_action=row_position_at_action)
+                                
+                                # Check if new row is truly new (not in old_rows_by_id or is a duplicate)
+                                # Use the is_new_row_temporary_id we already calculated above, or recalculate if needed
+                                is_temporary_id = is_new_row_temporary_id
+                                if not is_temporary_id and new_row_id and new_row_id not in old_rows_by_id:
+                                    if isinstance(new_row_id, (int, float)):
+                                        is_temporary_id = new_row_id > 1000000000000  # Timestamps are > 1e12
+                                    elif isinstance(new_row_id, str):
+                                        try:
+                                            num_val = int(new_row_id)
+                                            is_temporary_id = num_val > 1000000000000
+                                        except (ValueError, TypeError):
+                                            pass
+                                
+                                is_truly_new_for_add = new_row_id not in old_rows_by_id or new_row_id in duplicate_new_row_ids or is_temporary_id
+                                if is_truly_new_for_add:
+                                    # New row was added at this position - log it
+                                    if created_idx < len(created_rows_list):
+                                        created_row_id, _ = created_rows_list[created_idx]
+                                        new_row_data = new_row
+                                        row_position_at_action = 1
+                                        for p_num in sorted(new_phases_data.keys()):
+                                            if p_num < phase_num:
+                                                row_position_at_action += len(new_phases_data[p_num]['rows'])
+                                            elif p_num == phase_num:
+                                                row_position_at_action += idx
+                                                break
+                                        ActionLogger.log_row_add(project.id, user_name, user_role, created_row_id, phase_num, project.reset_epoch, row_data=new_row_data, row_position_at_action=row_position_at_action)
+                                        created_idx += 1
+                                created_idx += 1
+                                continue
+                            
+                            # Check if same row ID (should match if not moved and not recreated)
+                            if old_row.get('id') and new_row.get('id') and old_row['id'] == new_row['id']:
+                                # Same row - check for content changes
+                                if (old_row['role'] != new_row['role'] or
+                                    old_row['time'] != new_row['time'] or
+                                    old_row['duration'] != new_row['duration'] or
+                                    old_row['description'] != new_row['description'] or
+                                    old_row['script'] != new_row['script']):
+                                    # Row was edited - log each field change separately
+                                    if created_idx < len(created_rows_list):
+                                        new_row_id_log, _ = created_rows_list[created_idx]
+                                        # Log each changed field as a separate entry
+                                        if old_row['role'] != new_row['role']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'role': old_row['role']}, {'role': new_row['role']}, project.reset_epoch)
+                                        if old_row['time'] != new_row['time']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'time': old_row['time']}, {'time': new_row['time']}, project.reset_epoch)
+                                        if old_row['duration'] != new_row['duration']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'duration': old_row['duration']}, {'duration': new_row['duration']}, project.reset_epoch)
+                                        if old_row['description'] != new_row['description']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'description': old_row['description']}, {'description': new_row['description']}, project.reset_epoch)
+                                        if old_row['script'] != new_row['script']:
+                                            ActionLogger.log_row_edit(project.id, user_name, user_role, new_row_id_log, phase_num, {'script': old_row['script']}, {'script': new_row['script']}, project.reset_epoch)
+                            # Increment created_idx since this position exists in new data
+                            created_idx += 1
+            
+            # Log rows in new phases
+            for phase_num in new_phases_data.keys():
+                if phase_num not in old_phases_data:
+                    # All rows in this new phase are additions
+                    new_phase_rows = new_phases_data[phase_num]['rows']
+                    for idx, (new_row_id, _) in enumerate(created_rows.get(phase_num, [])):
+                        new_row_data = new_phase_rows[idx] if idx < len(new_phase_rows) else None
+                        # Calculate row position at action time (1-based)
+                        row_position_at_action = 1
+                        for p_num in sorted(new_phases_data.keys()):
+                            if p_num < phase_num:
+                                row_position_at_action += len(new_phases_data[p_num]['rows'])
+                            elif p_num == phase_num:
+                                row_position_at_action += idx
+                                break
+                        ActionLogger.log_row_add(project.id, user_name, user_role, new_row_id, phase_num, project.reset_epoch, row_data=new_row_data, row_position_at_action=row_position_at_action)
         
         # Emit real-time update to all clients
         socketio = get_socketio()
@@ -669,11 +1540,53 @@ def update_table_data(project_id):
 def update_periodic_scripts_bulk(project_id):
     """Bulk update periodic scripts"""
     project = Project.query.get_or_404(project_id)
-    data = request.get_json()  # Array of scripts
+    request_data = request.get_json() or {}
+    
+    # Extract user info if provided, otherwise use defaults
+    # The request body may be an array of scripts or a dict with 'scripts' and user info
+    if isinstance(request_data, dict) and 'scripts' in request_data:
+        data = request_data['scripts']
+        user_name = request_data.get('user_name', 'Unknown')
+        user_role = request_data.get('user_role', project.manager_role)
+    else:
+        # Legacy format: just array of scripts
+        data = request_data
+        user_name = 'Unknown'
+        user_role = project.manager_role  # Assume manager since only managers can call this
+    should_log = True
     
     try:
+        # Get old scripts for comparison (match by name+path since IDs will change)
+        old_scripts_by_key = {}
+        if should_log:
+            old_scripts_list = PeriodicScript.query.filter_by(project_id=project_id).all()
+            for script in old_scripts_list:
+                key = (script.name, script.path)
+                old_scripts_by_key[key] = {
+                    'id': script.id,
+                    'name': script.name,
+                    'path': script.path,
+                    'status': script.status
+                }
+        
+        # Build new scripts dict by name+path
+        new_scripts_by_key = {}
+        for script_data in data:
+            key = (script_data.get('name', ''), script_data.get('path', ''))
+            new_scripts_by_key[key] = script_data
+        
+        # Log script deletions (scripts in old but not in new)
+        if should_log:
+            deleted_keys = set(old_scripts_by_key.keys()) - set(new_scripts_by_key.keys())
+            for key in deleted_keys:
+                old_script = old_scripts_by_key[key]
+                ActionLogger.log_script_delete(project.id, user_name, user_role, old_script['id'], old_script['name'], project.reset_epoch)
+        
         # Clear existing scripts
         PeriodicScript.query.filter_by(project_id=project_id).delete()
+        
+        # Track created scripts for logging (indexed by name+path)
+        created_scripts_by_key = {}
         
         # Recreate scripts
         for script_data in data:
@@ -684,8 +1597,32 @@ def update_periodic_scripts_bulk(project_id):
                 status=script_data.get('status', False)
             )
             db.session.add(script)
+            db.session.flush()  # Get script.id
+            key = (script.name, script.path)
+            created_scripts_by_key[key] = script
         
         db.session.commit()
+        
+        # Log script additions and updates
+        if should_log:
+            # Log additions (new scripts not in old_scripts_by_key)
+            added_keys = set(new_scripts_by_key.keys()) - set(old_scripts_by_key.keys())
+            for key in added_keys:
+                script = created_scripts_by_key[key]
+                ActionLogger.log_script_add(project.id, user_name, user_role, script.id, script.name, project.reset_epoch)
+            
+            # Log updates (scripts that existed and content changed)
+            updated_keys = set(old_scripts_by_key.keys()) & set(new_scripts_by_key.keys())
+            for key in updated_keys:
+                old_script = old_scripts_by_key[key]
+                new_script_data = new_scripts_by_key[key]
+                # Check if content changed (excluding ID since that always changes)
+                if (old_script['name'] != new_script_data.get('name') or
+                    old_script['path'] != new_script_data.get('path') or
+                    old_script['status'] != new_script_data.get('status')):
+                    script = created_scripts_by_key[key]
+                    ActionLogger.log_script_update(project.id, user_name, user_role, script.id, script.name, project.reset_epoch)
+        
         return jsonify({'message': 'Periodic scripts updated'}), 200
     except Exception as e:
         db.session.rollback()
@@ -2195,6 +3132,10 @@ def get_action_logs_pdf(project_id):
             
             action_type_map_he = {
                 'row_status_change': 'שינוי סטטוס שורה',
+                'row_edit': 'עריכת שורה',
+                'row_add': 'הוספת שורה',
+                'row_delete': 'מחיקת שורה',
+                'row_move': 'העברת שורה',
                 'script_execution': 'הרצת סקריפט',
                 'phase_activation': 'הפעלת שלב',
                 'reset_statuses': 'איפוס כל הסטטוסים'
@@ -2247,6 +3188,57 @@ def get_action_logs_pdf(project_id):
                             new_status = status_messages_he.get(details.get('new_status', 'N/A'), details.get('new_status', 'N/A'))
                             row_index = row_id_to_index.get(log.row_id, log.row_id)  # Use row index, fallback to row_id if not found
                             details_str = f"{details_text_he['Row #']}{row_index}: {old_status} ← {new_status}"
+                        elif log.action_type == 'row_edit':
+                            row_index = row_id_to_index.get(log.row_id, log.row_id)  # Use row index, fallback to row_id if not found
+                            old_data = details.get('old_data', {})
+                            new_data = details.get('new_data', {})
+                            # Each log entry now contains only one field change
+                            field_names_he = {
+                                'role': 'תפקיד',
+                                'time': 'זמן',
+                                'duration': 'משך',
+                                'description': 'תיאור',
+                                'script': 'סקריפט'
+                            }
+                            # Get the single field that changed (should be only one key in each dict)
+                            changed_fields = list(set(old_data.keys()) & set(new_data.keys()))
+                            if changed_fields:
+                                field = changed_fields[0]  # Should be only one field
+                                old_val = old_data[field] or ''
+                                new_val = new_data[field] or ''
+                                field_name = field_names_he.get(field, field)
+                                # Truncate long values for display
+                                if len(old_val) > 30:
+                                    old_val = old_val[:27] + '...'
+                                if len(new_val) > 30:
+                                    new_val = new_val[:27] + '...'
+                                details_str = f"{details_text_he['Row #']}{row_index}: {field_name}: {old_val} ← {new_val}"
+                            else:
+                                details_str = f"{details_text_he['Row #']}{row_index}"
+                        elif log.action_type == 'row_move':
+                            # Use stored row_position if available (from time of move), otherwise try to look up current position
+                            row_position = details.get('row_position')
+                            if row_position is not None:
+                                row_index = row_position
+                            else:
+                                row_index = row_id_to_index.get(log.row_id, log.row_id)  # Fallback to current position or row_id
+                            
+                            source_phase = details.get('source_phase', '')
+                            target_phase = details.get('target_phase', '')
+                            old_index = details.get('old_index')
+                            new_index = details.get('new_index')
+                            
+                            if source_phase != target_phase:
+                                # Row moved between phases
+                                details_str = f"{details_text_he['Row #']}{row_index}: משלב {source_phase} לשלב {target_phase}"
+                            else:
+                                # Row moved within same phase
+                                if old_index is not None and new_index is not None:
+                                    # Display 1-based positions for user-friendliness
+                                    # old_index is where the row WAS, new_index is where it IS now
+                                    details_str = f"{details_text_he['Row #']}{row_index}: ממיקום {old_index + 1} למיקום {new_index + 1} בשלב {source_phase}"
+                                else:
+                                    details_str = f"{details_text_he['Row #']}{row_index}: שינוי מיקום בשלב {source_phase}"
                         elif log.action_type == 'script_execution':
                             script_path = details.get('script_path', status_messages_he['N/A'])
                             row_index = row_id_to_index.get(log.row_id, log.row_id)  # Use row index, fallback to row_id if not found
@@ -2258,6 +3250,80 @@ def get_action_logs_pdf(project_id):
                         elif log.action_type == 'reset_statuses':
                             rows_count = details.get('rows_count', 0)
                             details_str = f"{details_text_he['Reset']} {rows_count} {details_text_he['rows to N/A']}"
+                        elif log.action_type == 'row_add':
+                            # Use stored position if available, otherwise try to look up current position
+                            row_position = details.get('row_position_at_action')
+                            if row_position is not None:
+                                row_index = row_position
+                            else:
+                                row_index = row_id_to_index.get(log.row_id, log.row_id)  # Fallback to current position or row_id
+                            row_data = details.get('row_data', {})
+                            if row_data:
+                                role = row_data.get('role', '')
+                                time = row_data.get('time', '')
+                                duration = row_data.get('duration', '')
+                                description = row_data.get('description', '')
+                                script = row_data.get('script', '')
+                                # Format for RTL: Build string with proper Hebrew ordering
+                                # Use Hebrew comma (׳) or line breaks for better RTL display
+                                details_parts = []
+                                if role:
+                                    details_parts.append(f"תפקיד: {role}")
+                                if time:
+                                    details_parts.append(f"זמן: {time}")
+                                if duration:
+                                    details_parts.append(f"משך: {duration}")
+                                if description:
+                                    # Truncate long descriptions
+                                    desc = description[:50] + '...' if len(description) > 50 else description
+                                    details_parts.append(f"תיאור: {desc}")
+                                if script:
+                                    details_parts.append(f"סקריפט: {script}")
+                                if details_parts:
+                                    # Format for RTL: Row number first, then details separated by spaces
+                                    # The bidi algorithm will handle RTL correctly
+                                    details_str = f"{details_text_he['Row #']}{row_index}: {' '.join(details_parts)}"
+                                else:
+                                    details_str = f"{details_text_he['Row #']}{row_index}"
+                            else:
+                                details_str = f"{details_text_he['Row #']}{row_index}"
+                        elif log.action_type == 'row_delete':
+                            # Use stored position if available, otherwise try to look up current position
+                            row_position = details.get('row_position_at_action')
+                            if row_position is not None:
+                                row_index = row_position
+                            else:
+                                row_index = row_id_to_index.get(log.row_id, log.row_id)  # Fallback to current position or row_id
+                            row_data = details.get('row_data', {})
+                            if row_data:
+                                role = row_data.get('role', '')
+                                time = row_data.get('time', '')
+                                duration = row_data.get('duration', '')
+                                description = row_data.get('description', '')
+                                script = row_data.get('script', '')
+                                # Format for RTL: Build string with proper Hebrew ordering
+                                # Use Hebrew comma (׳) or line breaks for better RTL display
+                                details_parts = []
+                                if role:
+                                    details_parts.append(f"תפקיד: {role}")
+                                if time:
+                                    details_parts.append(f"זמן: {time}")
+                                if duration:
+                                    details_parts.append(f"משך: {duration}")
+                                if description:
+                                    # Truncate long descriptions
+                                    desc = description[:50] + '...' if len(description) > 50 else description
+                                    details_parts.append(f"תיאור: {desc}")
+                                if script:
+                                    details_parts.append(f"סקריפט: {script}")
+                                if details_parts:
+                                    # Format for RTL: Row number first, then details separated by spaces
+                                    # The bidi algorithm will handle RTL correctly
+                                    details_str = f"{details_text_he['Row #']}{row_index}: {' '.join(details_parts)}"
+                                else:
+                                    details_str = f"{details_text_he['Row #']}{row_index}"
+                            else:
+                                details_str = f"{details_text_he['Row #']}{row_index}"
                     except:
                         details_str = log.action_details[:50]  # Truncate if not JSON
                 
