@@ -41,7 +41,4 @@ __pycache__/
 *.pyd
 
 # IDE - IntelliJ IDEA
-.idea/workspace.xml
-.idea/tasks.xml
-.idea/dictionaries
-.idea/shelf
+.idea/
