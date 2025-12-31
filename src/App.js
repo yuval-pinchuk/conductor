@@ -17,6 +17,29 @@ const App = () => {
     loginStateRef.current = loginState;
   }, [loginState]);
 
+  // Clean up performance marks/measures periodically to prevent memory leaks
+  // This is needed because browsers (especially Chrome with React StrictMode) 
+  // automatically create PerformanceMeasure entries that accumulate over time
+  useEffect(() => {
+    if (typeof performance !== 'undefined' && performance.clearMarks && performance.clearMeasures) {
+      const cleanupInterval = setInterval(() => {
+        try {
+          performance.clearMarks();
+          performance.clearMeasures();
+          // Also clear resource timing entries if available
+          if (performance.clearResourceTimings) {
+            performance.clearResourceTimings();
+          }
+        } catch (e) {
+          // Ignore errors (some browsers may not support all methods)
+        }
+      }, 30 * 60 * 1000); // Clean every 30 minutes
+      
+      // Cleanup on unmount
+      return () => clearInterval(cleanupInterval);
+    }
+  }, []);
+
   const handleLogin = (details) => {
     setLoginState(details);
   };
